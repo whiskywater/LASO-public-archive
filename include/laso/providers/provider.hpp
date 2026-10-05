@@ -21,6 +21,8 @@ struct ProviderMetadata {
   bool remote = false, streaming = false, network = false;
   Milliseconds timeout{30000};
   std::vector<std::string> capabilities{"structured-output"};
+  // Providers that understand provider-neutral SessionContext payloads
+  // advertise "session-context" and receive that payload on ModelRequest.
   // Opaque providers promise to consume and return continuation state. Stateless
   // providers explicitly declare that every turn is independent.
   ContinuationMode continuation_mode = ContinuationMode::Unsupported;
@@ -29,6 +31,7 @@ struct ModelRequest {
   std::string model, prompt;
   Json input = Json::object(), options = Json::object();
   std::optional<OpaqueProviderContinuation> continuation;
+  std::optional<SessionContext> session_context;
 };
 struct ModelResponse {
   Json output = Json::object();
@@ -67,6 +70,7 @@ public:
     ProviderMetadata result;
     result.name = "mock";
     result.version = "1";
+    result.capabilities.push_back("session-context");
     result.continuation_mode = ContinuationMode::Opaque;
     return result;
   }

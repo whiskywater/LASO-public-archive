@@ -26,7 +26,13 @@ static int32_t generate(void *instance, const char *input, uint64_t input_length
   static const char result[] =
       "{\"ok\":true,\"provider\":\"example-model\",\"model\":\"offline-example\","
       "\"output\":{\"text\":\"Offline plugin model response\",\"reviewed\":true}}";
-  return context->write_json(context->host_context, result, sizeof(result) - 1) == LASO_OK
+  static const char context_result[] =
+      "{\"ok\":true,\"provider\":\"example-model\",\"model\":\"offline-example\","
+      "\"output\":{\"text\":\"Offline plugin model response\",\"reviewed\":true,"
+      "\"session_context_received\":true}}";
+  const char *selected = strstr(input, "\"session_context\":") ? context_result : result;
+  const size_t selected_length = strlen(selected);
+  return context->write_json(context->host_context, selected, selected_length) == LASO_OK
              ? LASO_OK
              : LASO_FAILED;
 }
@@ -37,7 +43,9 @@ LASO_PLUGIN_EXPORT const laso_plugin_descriptor *laso_plugin_query(void) {
 
 LASO_PLUGIN_EXPORT int32_t laso_plugin_init(const laso_host_api *host, laso_plugin_handle *out) {
   static const char metadata[] = "{\"version\":\"1.0.0\",\"network\":false,\"remote\":false,"
-                                 "\"capabilities\":[\"chat-completions\",\"structured-output\"]}";
+                                 "\"continuation_mode\":\"stateless\","
+                                 "\"capabilities\":[\"chat-completions\",\"structured-output\","
+                                 "\"session-context\"]}";
   static const laso_component component = {.struct_size = sizeof(laso_component),
                                            .kind = LASO_COMPONENT_MODEL,
                                            .name = "example-model",

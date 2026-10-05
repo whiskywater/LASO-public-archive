@@ -585,30 +585,104 @@ Task<void> Runtime::execute(Run r, std::stop_token stop) {
         context.session_id = r.session_id;
         const auto session_id = r.session_id;
         const auto run_id = r.id;
+        Json continuation_snapshot = Json::array();
+        bool has_context_snapshot = false;
+        std::optional<RunContextSnapshot> stored_snapshot;
+        try {
+          stored_snapshot =
+              deps_.storage.get(RecordKind::RunContextSnapshot, run_id).get<RunContextSnapshot>();
+        } catch (const Error &error) {
+          // Runs bound before this schema upgrade have no snapshot. Their session
+          // continuation retains the pre-upgrade recovery behavior.
+          if (error.code != ErrorCode::NotFound)
+            throw;
+        }
+        if (stored_snapshot) {
+          const auto &snapshot = *stored_snapshot;
+          if (snapshot.run_id != run_id || snapshot.session_id != session_id ||
+              snapshot.session_turn_id != r.session_turn_id)
+            throw Error(ErrorCode::Storage, "Stored run context snapshot is invalid");
+          continuation_snapshot = snapshot.provider_continuations;
+          has_context_snapshot = true;
+          if (!snapshot.context_generation_id.empty()) {
+            const auto generation =
+                deps_.storage
+                    .get(RecordKind::SessionContextGeneration, snapshot.context_generation_id)
+                    .get<SessionContextGeneration>();
+            if (generation.session_id != session_id ||
+                generation.generation != snapshot.context_generation ||
+                generation.through_turn_sequence != snapshot.context_through_turn_sequence)
+              throw Error(ErrorCode::Storage, "Stored context generation reference is invalid");
+            context.session_context = SessionContext{generation.id,
+                                                     generation.representation_kind,
+                                                     generation.representation_version,
+                                                     generation.generation,
+                                                     generation.through_turn_sequence,
+                                                     generation.payload};
+            const auto previous_turn = snapshot.turn_sequence - 1;
+            if (generation.through_turn_sequence < previous_turn) {
+              const auto expected = previous_turn - generation.through_turn_sequence;
+              if (expected > 1000)
+                throw Error(ErrorCode::Capacity, "Session context has too many uncompressed turns");
+              auto recent_turns = deps_.storage.session_turns_between(
+                  session_id, generation.through_turn_sequence, previous_turn, 1000);
+              if (recent_turns.size() != expected)
+                throw Error(ErrorCode::Storage, "Session context history tail is incomplete");
+              std::uint64_t sequence = generation.through_turn_sequence;
+              std::size_t bytes = 0;
+              for (const auto &turn : recent_turns) {
+                if (turn.value("session_id", std::string{}) != session_id ||
+                    turn.value("sequence", std::uint64_t{0}) != ++sequence)
+                  throw Error(ErrorCode::Storage, "Session context history tail is invalid");
+                bytes += turn.dump().size();
+                if (bytes > 1024 * 1024)
+                  throw Error(ErrorCode::Capacity,
+                              "Session context history tail exceeds the size limit");
+              }
+              context.session_context->recent_turns = std::move(recent_turns);
+            }
+          }
+        }
         context.load_provider_continuation =
-            [this, session_id,
-             run_id](const std::string &provider_id) -> std::optional<OpaqueProviderContinuation> {
+            [this, session_id, run_id, continuation_snapshot, has_context_snapshot](
+                const std::string &provider_id) -> std::optional<OpaqueProviderContinuation> {
           const auto read =
-              [this, &session_id, &provider_id](
+              [this, &session_id, &run_id, &provider_id](
                   const std::string &id,
                   const std::string &scope) -> std::optional<OpaqueProviderContinuation> {
             try {
               const auto value = deps_.storage.get(RecordKind::SessionContinuation, id);
               if (value.value("scope", std::string{}) != scope ||
                   value.value("session_id", std::string{}) != session_id ||
-                  value.value("provider_id", std::string{}) != provider_id)
+                  value.value("provider_id", std::string{}) != provider_id ||
+                  (scope == "candidate" && value.value("run_id", std::string{}) != run_id))
                 throw Error(ErrorCode::Storage, "Stored provider continuation is invalid");
               const auto state = value.value("state", std::string{});
-              if (state.empty() || state.size() > 64 * 1024)
+              const auto version = value.value("provider_version", std::string{});
+              if (version.empty() || state.empty() || state.size() > 64 * 1024)
                 throw Error(ErrorCode::Storage, "Stored provider continuation is invalid");
-              return OpaqueProviderContinuation{
-                  provider_id, value.value("provider_version", std::string{}), state};
+              return OpaqueProviderContinuation{provider_id, version, state};
             } catch (const Error &error) {
               if (error.code == ErrorCode::NotFound)
                 return std::nullopt;
               throw;
             }
           };
+          if (has_context_snapshot) {
+            if (auto candidate =
+                    read(run_continuation_candidate_id(run_id, provider_id), "candidate"))
+              return candidate;
+            for (const auto &value : continuation_snapshot) {
+              if (value.value("provider_id", std::string{}) == provider_id) {
+                const auto version = value.value("provider_version", std::string{});
+                const auto state = value.value("state", std::string{});
+                if (version.empty() || state.empty() || state.size() > 64 * 1024)
+                  throw Error(ErrorCode::Storage, "Stored provider continuation is invalid");
+                return OpaqueProviderContinuation{provider_id, version, state};
+              }
+            }
+            return std::nullopt;
+          }
           if (auto candidate =
                   read(run_continuation_candidate_id(run_id, provider_id), "candidate"))
             return candidate;

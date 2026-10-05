@@ -162,6 +162,11 @@ int32_t register_component(void *opaque, const laso_component *c) noexcept {
       m.context_size = json.value("context_size", std::size_t{4096});
       m.timeout = Milliseconds(timeout);
       m.capabilities = json.value("capabilities", std::vector<std::string>{"chat-completions"});
+      const auto continuation_mode = json.value("continuation_mode", std::string{"unsupported"});
+      if (continuation_mode == "stateless")
+        m.continuation_mode = ContinuationMode::Stateless;
+      else if (continuation_mode != "unsupported")
+        throw Error(ErrorCode::Plugin, "Invalid provider continuation mode");
       if (m.context_size == 0 || m.context_size > 100000000 || m.capabilities.size() > 32)
         throw Error(ErrorCode::Plugin, "Invalid provider metadata");
       const auto health = c->struct_size >= sizeof(laso_component) ? c->health : nullptr;
@@ -294,15 +299,24 @@ public:
                                 call_should_stop,
                                 write_json,
                                 nullptr};
-      const Json input{{"operation", "generate"},
-                       {"logical_model", registration_.metadata.name},
-                       {"model", request.model},
-                       {"prompt", request.prompt},
-                       {"input", request.input},
-                       {"options", request.options},
-                       {"timeout_ms", std::chrono::duration_cast<Milliseconds>(
-                                          execution.deadline - std::chrono::steady_clock::now())
-                                          .count()}};
+      Json input{{"operation", "generate"},
+                 {"logical_model", registration_.metadata.name},
+                 {"model", request.model},
+                 {"prompt", request.prompt},
+                 {"input", request.input},
+                 {"options", request.options},
+                 {"timeout_ms", std::chrono::duration_cast<Milliseconds>(
+                                    execution.deadline - std::chrono::steady_clock::now())
+                                    .count()}};
+      if (request.session_context)
+        input["session_context"] = {
+            {"generation_id", request.session_context->generation_id},
+            {"generation", request.session_context->generation},
+            {"through_turn_sequence", request.session_context->through_turn_sequence},
+            {"representation_kind", request.session_context->representation_kind},
+            {"representation_version", request.session_context->representation_version},
+            {"payload", request.session_context->payload},
+            {"recent_turns", request.session_context->recent_turns}};
       const auto wire = input.dump();
       if (wire.size() > std::size_t{1024} * 1024)
         throw Error(ErrorCode::Provider, "Plugin provider input exceeds limit");

@@ -19,10 +19,12 @@ version number. The current session capabilities are:
 | `sessions.sequential_execution` | Execute accepted turns in sequence, bind each turn to one run, and recover queued/bound work after restart using the existing fencing path. |
 | `sessions.event_replay` | Retrieve durable session events after a sequence cursor. |
 | `sessions.sse` | Stream/replay the event journal with `Last-Event-ID` reconnect support and bounded per-process admission. |
+| `sessions.context_generations` | Store immutable provider-neutral context generations against completed history boundaries, with revision-checked ordering. |
+| `sessions.run_context_snapshots` | Capture the selected generation and provider continuation state atomically with session turn-to-run binding. |
 
-No context-generation, context-snapshot, membership, or authenticated-principal
-capability is advertised. Provider continuation state used by session execution
-is opaque and is not a general context-generation API.
+No automatic context reducer/compaction, membership, or authenticated-principal
+capability is advertised. Context generations are supplied by a generic caller;
+LASO does not create summaries or choose a vendor-specific representation.
 
 ## Session API
 
@@ -42,9 +44,28 @@ POST /api/v1/sessions/{session_id}/turns
 {"idempotency_key":"client-request-42","input":{"task":"inspect the change"}}
 
 GET /api/v1/sessions/{session_id}/turns?limit=50&offset=0
+GET /api/v1/sessions/{session_id}/context
+POST /api/v1/sessions/{session_id}/context/generations
+GET /api/v1/runs/{run_id}/context
 GET /api/v1/sessions/{session_id}/events?after=0&limit=50
 GET /api/v1/sessions/{session_id}/events/stream
 POST /api/v1/sessions/{session_id}/close
+```
+
+Context generation creation uses an optimistic session-local generation number.
+The response omits the stored payload; only providers advertising
+`session-context` receive it as a separate request field.
+
+```http
+POST /api/v1/sessions/{session_id}/context/generations
+{
+  "expected_generation": 0,
+  "through_turn_sequence": 0,
+  "idempotency_key": "context-build-1",
+  "representation_kind": "structured-context",
+  "representation_version": "1",
+  "payload": {"state": "provider-neutral derived data"}
+}
 ```
 
 The session response contains its ID, immutable pipeline identity, open/closing/
@@ -82,17 +103,46 @@ ID and deduplicate by sequence. PostgreSQL journal polling exposes commits from
 other instances without sticky sessions. The SSE admission limit is per process,
 not cluster-wide; see [the SSE contract](session-sse.md) for limits and lifecycle.
 
-## Context boundary and remaining runtime work
+## Context generations and run snapshots
 
-Session turn order, run linkage, and provider continuation make retries and
-execution recoverable, but LASO does not yet provide durable derived context
-generations or a durable record of the exact context/configuration consumed by
-each run. Full turn/event history is not compacted or replaced. A future generic
-context builder/reducer must keep original history intact, persist versioned
-context generations, and bind each session run to an immutable context snapshot.
-The reducer may be supplied by a configured pipeline/provider/plugin; Core does
-not prescribe a vendor, summarization algorithm, or chat format. Applications
-must not independently compact authoritative session context.
+Full session turns/events remain the authoritative original history and are
+never replaced by derived state. The API accepts a provider-neutral context
+payload with an explicit representation kind/version, idempotency key, expected
+current generation, and `through_turn_sequence`. The boundary must be zero or a
+contiguous range of terminal turns. Generations are numbered per session, link
+to their predecessor, and are immutable; a stale expected number returns `409`.
+Creation and turn/run binding lock the same session row in PostgreSQL, so a
+generation is either visible to a later turn or misses that turn
+deterministically.
+
+At atomic turn/run binding, LASO records an immutable `RunContextSnapshot` keyed
+by run ID. It identifies the session, turn and sequence, history boundary,
+selected generation (if any), and the generation's represented boundary. It
+also captures the exact opaque provider continuation states that were current
+at binding. Run execution reads continuation from this snapshot instead of the
+mutable per-session current record. A later generation or continuation update
+cannot rewrite a prior snapshot. The run record itself pins the pipeline
+identity/version and current turn input.
+
+When a generation is selected, LASO passes it separately as `session_context`
+to model providers. That value includes the durable ordered turns after the
+generation boundary and before the current turn, so turns accepted since the
+generation are not omitted. Providers must advertise the generic
+`session-context` capability to receive one; otherwise execution fails closed.
+The API read
+endpoint exposes generation metadata but not its payload. The run-context
+endpoint never returns provider continuation payloads. The first implementation
+has no content hash or automatic reducer. Future context builders/reducers may
+be pipeline-, provider-, plugin-, or application-supplied; Core does not
+prescribe a vendor or summarization algorithm. Full accepted turn/event history
+remains unchanged and authoritative.
+
+Provider continuation remains separate opaque adapter state: it is the
+provider-specific continuation consumed by an adapter, and the run snapshot
+pins the exact state used by a particular run. A context generation is the
+provider-neutral derived representation; it does not replace original history
+or continuation state. Applications must not independently compact
+authoritative session context.
 
 The API's identity provider and authorization hook are generic extension points.
 Deployments must provide authenticated identity and enforce session resource

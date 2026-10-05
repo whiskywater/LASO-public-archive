@@ -461,6 +461,84 @@ struct AgentSession {
   std::uint64_t dispatch_generation = 0;
   std::uint64_t next_sequence = 1;
 };
+// Provider-neutral derived context. The payload is immutable after acceptance;
+// its schema is identified by representation_kind and representation_version.
+struct SessionContextGeneration {
+  std::string id = uuid(), session_id, predecessor_id, created_at = timestamp();
+  std::uint64_t generation = 0, through_turn_sequence = 0;
+  std::string representation_kind, representation_version, idempotency_key;
+  Json payload = Json::object();
+};
+inline void to_json(Json &j, const SessionContextGeneration &g) {
+  j = {{"id", g.id},
+       {"session_id", g.session_id},
+       {"generation", g.generation},
+       {"predecessor_id", g.predecessor_id},
+       {"through_turn_sequence", g.through_turn_sequence},
+       {"created_at", g.created_at},
+       {"representation_kind", g.representation_kind},
+       {"representation_version", g.representation_version},
+       {"idempotency_key", g.idempotency_key},
+       {"payload", g.payload}};
+}
+inline void from_json(const Json &j, SessionContextGeneration &g) {
+  g.id = j.value("id", uuid());
+  g.session_id = j.value("session_id", std::string{});
+  g.generation = j.value("generation", std::uint64_t{0});
+  g.predecessor_id = j.value("predecessor_id", std::string{});
+  g.through_turn_sequence = j.value("through_turn_sequence", std::uint64_t{0});
+  g.created_at = j.value("created_at", timestamp());
+  g.representation_kind = j.value("representation_kind", std::string{});
+  g.representation_version = j.value("representation_version", std::string{});
+  g.idempotency_key = j.value("idempotency_key", std::string{});
+  g.payload = j.value("payload", Json::object());
+}
+// Immutable per-run context provenance. provider_continuations is private
+// adapter state captured at binding time and must not be exposed by the API.
+struct RunContextSnapshot {
+  std::string run_id, session_id, session_turn_id, created_at = timestamp();
+  std::string context_generation_id, context_generation_predecessor_id;
+  std::uint64_t turn_sequence = 0, history_through_turn_sequence = 0;
+  std::uint64_t context_generation = 0, context_through_turn_sequence = 0;
+  std::string representation_kind, representation_version;
+  Json provider_continuations = Json::array();
+};
+inline void to_json(Json &j, const RunContextSnapshot &s) {
+  j = {{"run_id", s.run_id},
+       {"session_id", s.session_id},
+       {"session_turn_id", s.session_turn_id},
+       {"turn_sequence", s.turn_sequence},
+       {"history_through_turn_sequence", s.history_through_turn_sequence},
+       {"context_generation_id", s.context_generation_id},
+       {"context_generation", s.context_generation},
+       {"context_generation_predecessor_id", s.context_generation_predecessor_id},
+       {"context_through_turn_sequence", s.context_through_turn_sequence},
+       {"representation_kind", s.representation_kind},
+       {"representation_version", s.representation_version},
+       {"created_at", s.created_at},
+       {"provider_continuations", s.provider_continuations}};
+}
+inline void from_json(const Json &j, RunContextSnapshot &s) {
+  s.run_id = j.value("run_id", std::string{});
+  s.session_id = j.value("session_id", std::string{});
+  s.session_turn_id = j.value("session_turn_id", std::string{});
+  s.turn_sequence = j.value("turn_sequence", std::uint64_t{0});
+  s.history_through_turn_sequence = j.value("history_through_turn_sequence", std::uint64_t{0});
+  s.context_generation_id = j.value("context_generation_id", std::string{});
+  s.context_generation = j.value("context_generation", std::uint64_t{0});
+  s.context_generation_predecessor_id = j.value("context_generation_predecessor_id", std::string{});
+  s.context_through_turn_sequence = j.value("context_through_turn_sequence", std::uint64_t{0});
+  s.representation_kind = j.value("representation_kind", std::string{});
+  s.representation_version = j.value("representation_version", std::string{});
+  s.created_at = j.value("created_at", timestamp());
+  s.provider_continuations = j.value("provider_continuations", Json::array());
+}
+struct SessionContext {
+  std::string generation_id, representation_kind, representation_version;
+  std::uint64_t generation = 0, through_turn_sequence = 0;
+  Json payload = Json::object();
+  Json recent_turns = Json::array();
+};
 inline void to_json(Json &j, const AgentSession &s) {
   j = {{"id", s.id},
        {"pipeline_id", s.pipeline_id},

@@ -68,7 +68,7 @@ the old worker's late result cannot commit authoritatively.
 ## Migration and backup policy
 
 PostgreSQL migrations are applied during storage initialization and recorded in
-`laso_schema_migrations`. The current schema version is 8. Upgrade from the
+`laso_schema_migrations`. The current schema version is 11. Upgrade from the
 previous supported version is covered by the PostgreSQL test suite. Take a
 database backup before upgrading. The migration mechanism does not provide a
 general rollback operation; rollback requires restoring the disposable/test

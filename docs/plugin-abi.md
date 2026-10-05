@@ -48,11 +48,20 @@ to the original values. A duplicate means the source/external-ID identity was
 already durably accepted; it is not a distributed exactly-once guarantee.
 
 A model component's metadata is a bounded JSON object with `version`, `remote`,
-`network`, `streaming`, `context_size`, `timeout_ms`, and `capabilities` fields.
+`network`, `streaming`, `context_size`, `timeout_ms`, `capabilities`, and the
+optional `continuation_mode` (`unsupported` or `stateless`) fields.
 Its `invoke` callback receives one JSON generation request containing `operation`,
 `logical_model`, `model`, `prompt`, `input`, `options`, and `timeout_ms`. It must
 write one JSON response containing `ok` and `output`; `model` and `provider` are
-optional. A model `health` callback is optional and returns
+optional. A provider that advertises `session-context` may also receive a
+`session_context` object with generation identity, representation kind/version,
+history boundary, provider-neutral payload, and the ordered durable
+`recent_turns` after that generation's boundary. Session-capable stateless
+providers declare `"continuation_mode":"stateless"`; plugins do not yet
+implement opaque provider continuation. Providers that do not advertise
+that capability are not sent generations, and a session run that selects one
+fails closed if its configured provider cannot consume it. A model `health`
+callback is optional and returns
 `{ "healthy": boolean, "detail": string }`.
 
 Plugins are discovered non-recursively in explicit configured directories.

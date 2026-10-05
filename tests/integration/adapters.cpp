@@ -28,6 +28,9 @@ namespace {
 struct ContinuationObservation {
   std::string input_tag;
   std::optional<std::string> received_state;
+  std::optional<std::string> context_generation_id;
+  Json context_payload = nullptr;
+  Json context_turns = Json::array();
 };
 
 struct ContinuationFixtureState {
@@ -60,7 +63,14 @@ public:
     bool block = false;
     {
       std::lock_guard lock(state_->mutex);
-      state_->observed.push_back({tag, previous});
+      state_->observed.push_back(
+          {tag, previous,
+           request.session_context
+               ? std::optional<std::string>{request.session_context->generation_id}
+               : std::nullopt,
+           request.session_context ? request.session_context->payload : Json(nullptr)});
+      state_->observed.back().context_turns =
+          request.session_context ? request.session_context->recent_turns : Json::array();
       reject = state_->reject_state;
       timeout = state_->timeout;
       block = state_->block_until_released;
@@ -93,6 +103,7 @@ public:
     ProviderMetadata result;
     result.name = "continuation-fixture";
     result.version = "1";
+    result.capabilities.push_back("session-context");
     result.continuation_mode = mode_;
     return result;
   }
@@ -535,6 +546,12 @@ TEST(Storage, SessionDispatchClaimsAndRunBindingAreAtomic) {
     EXPECT_FALSE(stored_turn.contains("dispatch_owner"));
     EXPECT_FALSE(stored_turn.contains("dispatch_fencing_token"));
     EXPECT_EQ(storage->get(RecordKind::Run, run.id).at("session_turn_id"), first_id);
+    const auto snapshot =
+        storage->get(RecordKind::RunContextSnapshot, run.id).template get<RunContextSnapshot>();
+    EXPECT_EQ(snapshot.session_id, session.id);
+    EXPECT_EQ(snapshot.session_turn_id, first_id);
+    EXPECT_EQ(snapshot.turn_sequence, 1U);
+    EXPECT_EQ(snapshot.history_through_turn_sequence, 1U);
 
     const auto stored_session =
         storage->get(RecordKind::AgentSession, session.id).template get<AgentSession>();
@@ -554,6 +571,137 @@ TEST(Storage, SessionDispatchClaimsAndRunBindingAreAtomic) {
     EXPECT_EQ(events[4].at("type"), "turn.execution.started");
     for (std::size_t i = 0; i < events.size(); ++i)
       EXPECT_EQ(events[i].at("sequence").template get<std::uint64_t>(), i + 1);
+  });
+}
+TEST(Storage, ContextGenerationsAndRunSnapshotsAreImmutableAndDurable) {
+  for_each_storage_backend([](const auto &backend) {
+    SCOPED_TRACE(backend.name);
+    TemporaryDirectory dir;
+    const auto database = dir.path / "context-provenance.db";
+    auto storage = backend.open(database);
+    AgentSession session;
+    session.pipeline_id = "example@1";
+    storage->commit({{RecordKind::AgentSession, session.id, session.id, Json(session)}});
+
+    const auto initial = storage->create_session_context_generation(
+        session.id, 0, 0, "generation-key-0", "structured-context", "1",
+        Json{{"state", "initial"}});
+    EXPECT_EQ(initial.at("generation"), 1U);
+    EXPECT_TRUE(initial.at("predecessor_id").template get<std::string>().empty());
+    const auto retried = storage->create_session_context_generation(
+        session.id, 0, 0, "generation-key-0", "structured-context", "1",
+        Json{{"state", "initial"}});
+    EXPECT_EQ(retried.at("id"), initial.at("id"));
+    EXPECT_EQ(storage
+                  ->get(RecordKind::SessionContextGeneration,
+                        initial.at("id").template get<std::string>())
+                  .at("generation"),
+              1U);
+    EXPECT_EQ(storage->list(RecordKind::SessionContextGeneration, session.id).size(), 1U);
+    EXPECT_THROW(storage->create_session_context_generation(
+                     session.id, 0, 0, "generation-key-other", "structured-context", "1",
+                     Json{{"state", "stale"}}),
+                 Error);
+    EXPECT_THROW(storage->create_session_context_generation(session.id, 0, 1, "future-boundary",
+                                                            "structured-context", "1",
+                                                            Json{{"state", "invalid"}}),
+                 Error);
+    auto mutated = initial;
+    mutated["payload"] = {{"state", "rewritten"}};
+    EXPECT_THROW(
+        storage->commit({{RecordKind::SessionContextGeneration,
+                          initial.at("id").template get<std::string>(), session.id, mutated}}),
+        Error);
+
+    const std::string completed_turn_id = "completed-context-turn";
+    storage->commit({{RecordKind::SessionTurn, completed_turn_id, session.id,
+                      Json{{"id", completed_turn_id},
+                           {"session_id", session.id},
+                           {"sequence", 1},
+                           {"state", "succeeded"},
+                           {"input", {{"text", "prior"}}}}}});
+    const auto next = storage->create_session_context_generation(
+        session.id, 1, 1, "generation-key-1", "structured-context", "1",
+        Json{{"state", "derived-through-one"}});
+    EXPECT_EQ(next.at("generation"), 2U);
+    EXPECT_EQ(next.at("predecessor_id"), initial.at("id"));
+    EXPECT_THROW(storage->create_session_context_generation(session.id, 2, 0, "backward-boundary",
+                                                            "structured-context", "1",
+                                                            Json{{"state", "stale-history"}}),
+                 Error);
+
+    Event accepted;
+    ASSERT_TRUE(storage->submit_session_turn(session.id, "context-turn-2",
+                                             Json{{"idempotency_key", "turn-2"},
+                                                  {"input", {{"text", "next"}}},
+                                                  {"pipeline_id", "example@1"},
+                                                  {"state", "queued"}},
+                                             Json(accepted)));
+    auto claimed =
+        storage->claim_next_session_turn(session.id, "instance-a", 0, timestamp(), Json::object());
+    ASSERT_TRUE(claimed);
+    laso::Run run;
+    run.id = "run-context-turn-2";
+    run.pipeline_id = "example";
+    run.session_id = session.id;
+    run.session_turn_id = "context-turn-2";
+    Event run_event;
+    Event session_event;
+    ASSERT_TRUE(storage->bind_session_turn_run(session.id, run.session_turn_id, Json(run),
+                                               Json(run_event), "instance-a", 0,
+                                               Json(session_event)));
+    const auto snapshot =
+        storage->get(RecordKind::RunContextSnapshot, run.id).template get<RunContextSnapshot>();
+    EXPECT_EQ(snapshot.context_generation_id, next.at("id").template get<std::string>());
+    EXPECT_EQ(snapshot.context_generation, 2U);
+    EXPECT_EQ(snapshot.context_through_turn_sequence, 1U);
+    EXPECT_EQ(snapshot.history_through_turn_sequence, 2U);
+    EXPECT_EQ(snapshot.run_id, run.id);
+    EXPECT_THROW(storage->commit(
+                     {{RecordKind::RunContextSnapshot, run.id, run.id, Json{{"run_id", run.id}}}}),
+                 Error);
+
+    storage.reset();
+    auto reopened = backend.open(database);
+    const auto persisted_generation =
+        reopened->get(RecordKind::SessionContextGeneration, next.at("id"));
+    EXPECT_EQ(persisted_generation.at("payload").at("state"), "derived-through-one");
+    const auto persisted_snapshot =
+        reopened->get(RecordKind::RunContextSnapshot, run.id).template get<RunContextSnapshot>();
+    EXPECT_EQ(persisted_snapshot.context_generation_id, next.at("id").template get<std::string>());
+    EXPECT_EQ(persisted_snapshot.session_turn_id, run.session_turn_id);
+
+    AgentSession concurrent_session;
+    concurrent_session.pipeline_id = "example@1";
+    reopened->commit({{RecordKind::AgentSession, concurrent_session.id, concurrent_session.id,
+                       Json(concurrent_session)}});
+    std::barrier start(3);
+    std::atomic<unsigned> created = 0;
+    std::atomic<unsigned> stale = 0;
+    std::atomic<bool> unexpected = false;
+    std::vector<std::jthread> writers;
+    for (unsigned i = 0; i < 2; ++i)
+      writers.emplace_back([&, i] {
+        start.arrive_and_wait();
+        try {
+          (void)reopened->create_session_context_generation(
+              concurrent_session.id, 0, 0, "concurrent-key-" + std::to_string(i),
+              "structured-context", "1", Json{{"writer", i}});
+          ++created;
+        } catch (const Error &error) {
+          if (error.code == ErrorCode::Conflict)
+            ++stale;
+          else
+            unexpected = true;
+        }
+      });
+    start.arrive_and_wait();
+    writers.clear();
+    EXPECT_EQ(created, 1U);
+    EXPECT_EQ(stale, 1U);
+    EXPECT_FALSE(unexpected);
+    EXPECT_EQ(reopened->list(RecordKind::SessionContextGeneration, concurrent_session.id).size(),
+              1U);
   });
 }
 TEST(Sessions, AcceptedTurnsExecuteDurablyInAcceptanceOrder) {
@@ -1154,6 +1302,141 @@ TEST(Sessions, InvalidAndTimedOutContinuationDoNotAdvanceState) {
   EXPECT_EQ(api.handle("GET", "/api/v1/sessions/" + session.id + "/turns", "").status, 200U);
   EXPECT_EQ(service.get(RecordKind::SessionTurn, first.at("id").get<std::string>()).at("state"),
             "succeeded");
+}
+
+TEST(Sessions, ContextGenerationIsPassedAndRunSnapshotDoesNotChange) {
+  TemporaryDirectory dir;
+  asio::io_context io;
+  auto trace = std::make_shared<ContinuationFixtureState>();
+  trace->secret_prefix = "snapshot-private-state";
+  Service service(io, continuation_config(dir.path));
+  register_continuation_fixture(service, trace);
+  LocalDevelopmentIdentity identity;
+  Api api(service, identity);
+  const auto pipeline =
+      service.register_pipeline(continuation_pipeline()).at("id").get<std::string>();
+  const auto session = service.create_session(pipeline);
+  const Json first_payload{{"memory", "provider-neutral context"}};
+  const Json generation_request{{"expected_generation", 0},
+                                {"through_turn_sequence", 0},
+                                {"idempotency_key", "context-generation-0"},
+                                {"representation_kind", "structured-context"},
+                                {"representation_version", "1"},
+                                {"payload", first_payload}};
+  const auto generation_response = api.handle(
+      "POST", "/api/v1/sessions/" + session.id + "/context/generations", generation_request.dump());
+  ASSERT_EQ(generation_response.status, 201U);
+  EXPECT_FALSE(generation_response.body.contains("payload"));
+  const auto retried_generation = api.handle(
+      "POST", "/api/v1/sessions/" + session.id + "/context/generations", generation_request.dump());
+  ASSERT_EQ(retried_generation.status, 201U);
+  EXPECT_EQ(retried_generation.body.at("id"), generation_response.body.at("id"));
+  auto conflicting_generation_request = generation_request;
+  conflicting_generation_request["payload"] = {{"memory", "different"}};
+  EXPECT_EQ(api.handle("POST", "/api/v1/sessions/" + session.id + "/context/generations",
+                       conflicting_generation_request.dump())
+                .status,
+            409U);
+  const auto first_generation = generation_response.body;
+  EXPECT_EQ(
+      service
+          .get(RecordKind::SessionContextGeneration, first_generation.at("id").get<std::string>())
+          .at("generation"),
+      1U);
+  const auto first = service.submit_session_turn(session.id, "turn-1", Json{{"tag", "first"}});
+  io.run();
+  const auto first_turn = service.get(RecordKind::SessionTurn, first.at("id").get<std::string>());
+  const auto first_run_id = first_turn.at("run_id").get<std::string>();
+  const auto first_snapshot = service.get(RecordKind::RunContextSnapshot, first_run_id);
+  EXPECT_EQ(first_snapshot.at("context_generation_id"), first_generation.at("id"));
+  EXPECT_EQ(first_snapshot.at("context_through_turn_sequence"), 0U);
+  {
+    std::lock_guard lock(trace->mutex);
+    ASSERT_EQ(trace->observed.size(), 1U);
+    EXPECT_EQ(trace->observed[0].context_generation_id,
+              first_generation.at("id").get<std::string>());
+    EXPECT_EQ(trace->observed[0].context_payload, first_payload);
+    EXPECT_TRUE(trace->observed[0].context_turns.empty());
+  }
+
+  io.restart();
+  const auto second = service.submit_session_turn(session.id, "turn-2", Json{{"tag", "second"}});
+  io.run();
+  const auto second_turn = service.get(RecordKind::SessionTurn, second.at("id").get<std::string>());
+  const auto second_run_id = second_turn.at("run_id").get<std::string>();
+  const auto second_snapshot = service.get(RecordKind::RunContextSnapshot, second_run_id);
+  {
+    std::lock_guard lock(trace->mutex);
+    ASSERT_EQ(trace->observed.size(), 2U);
+    ASSERT_EQ(trace->observed[1].context_turns.size(), 1U);
+    EXPECT_EQ(trace->observed[1].context_turns[0].at("id"), first_turn.at("id"));
+    EXPECT_EQ(trace->observed[1].context_turns[0].at("sequence"), 1U);
+  }
+  ASSERT_EQ(second_snapshot.at("provider_continuations").size(), 1U);
+  EXPECT_EQ(second_snapshot.at("provider_continuations")[0].at("state"),
+            "snapshot-private-state:first");
+  const auto second_generation = service.create_session_context_generation(
+      session.id, 1, 2, "context-generation-1", "structured-context", "1",
+      Json{{"memory", "through turn two"}});
+  EXPECT_EQ(second_generation.at("generation"), 2U);
+  EXPECT_EQ(service.get(RecordKind::RunContextSnapshot, second_run_id).at("context_generation_id"),
+            first_generation.at("id"));
+  EXPECT_NE(service.list(RecordKind::SessionContinuation, session.id).front().at("state"),
+            second_snapshot.at("provider_continuations")[0].at("state"));
+
+  const auto session_context = api.handle("GET", "/api/v1/sessions/" + session.id + "/context", "");
+  ASSERT_EQ(session_context.status, 200U);
+  EXPECT_EQ(session_context.body.at("current_generation").at("id"), second_generation.at("id"));
+  EXPECT_FALSE(session_context.body.at("current_generation").contains("payload"));
+  const auto run_context = api.handle("GET", "/api/v1/runs/" + second_run_id + "/context", "");
+  ASSERT_EQ(run_context.status, 200U);
+  EXPECT_EQ(run_context.body.at("context_generation_id"), first_generation.at("id"));
+  EXPECT_EQ(run_context.body.dump().find("snapshot-private-state"), std::string::npos);
+}
+
+TEST(Sessions, RunContextSnapshotPreservesRunLocalContinuationProgress) {
+  TemporaryDirectory dir;
+  asio::io_context io;
+  auto trace = std::make_shared<ContinuationFixtureState>();
+  trace->secret_prefix = "run-local-state-" + uuid();
+  Service service(io, continuation_config(dir.path));
+  register_continuation_fixture(service, trace);
+  const auto pipeline = service
+                            .register_pipeline(R"(laso: "1"
+name: repeated-provider
+version: 1
+nodes:
+  first:
+    type: agent
+    model: session-model
+    prompt: First provider step.
+  second:
+    type: agent
+    model: session-model
+    prompt: Second provider step.
+edges:
+  - {from: input, to: first}
+  - {from: first, to: second}
+  - {from: second, to: output}
+)")
+                            .at("id")
+                            .get<std::string>();
+  const auto session = service.create_session(pipeline);
+  (void)service.create_session_context_generation(session.id, 0, 0, "run-context-1",
+                                                  "structured-context", "1", Json{{"x", 1}});
+  (void)service.submit_session_turn(session.id, "two-provider-steps", Json{{"tag", "same-run"}});
+  io.run();
+  const auto turns = service.list(RecordKind::SessionTurn, session.id);
+  ASSERT_EQ(turns.size(), 1U);
+  ASSERT_EQ(turns.front().at("state"), "succeeded");
+  const auto snapshot =
+      service.get(RecordKind::RunContextSnapshot, turns.front().at("run_id").get<std::string>());
+  EXPECT_TRUE(snapshot.at("provider_continuations").empty());
+  std::lock_guard lock(trace->mutex);
+  ASSERT_EQ(trace->observed.size(), 2U);
+  EXPECT_FALSE(trace->observed[0].received_state.has_value());
+  ASSERT_TRUE(trace->observed[1].received_state.has_value());
+  EXPECT_EQ(*trace->observed[1].received_state, trace->secret_prefix + ":same-run");
 }
 
 TEST(Sessions, CloseAfterProviderCallDoesNotAdvanceContinuation) {
@@ -2659,9 +2942,13 @@ TEST(Storage, PostgresUpgradesSchemaSevenToCurrent) {
     pqxx::connection verify_connection(dsn);
     pqxx::read_transaction verify(verify_connection);
     verify.exec("SET search_path TO \"" + schema + "\", public");
-    EXPECT_EQ(verify.exec1("SELECT MAX(version) FROM laso_schema_migrations")[0].as<int>(), 10);
+    EXPECT_EQ(verify.exec1("SELECT MAX(version) FROM laso_schema_migrations")[0].as<int>(), 11);
     EXPECT_STREQ(verify.exec1("SELECT to_regclass('node_work')")[0].c_str(), "node_work");
     EXPECT_STREQ(verify.exec1("SELECT to_regclass('agent_sessions')")[0].c_str(), "agent_sessions");
+    EXPECT_STREQ(verify.exec1("SELECT to_regclass('session_context_generations')")[0].c_str(),
+                 "session_context_generations");
+    EXPECT_STREQ(verify.exec1("SELECT to_regclass('run_context_snapshots')")[0].c_str(),
+                 "run_context_snapshots");
   } catch (...) {
     pqxx::connection cleanup_connection(dsn);
     pqxx::work cleanup(cleanup_connection);
@@ -2905,6 +3192,30 @@ edges:
   EXPECT_EQ(r.state, RunState::Completed);
   EXPECT_EQ(r.message.payload.at("text"), "Offline plugin model response");
   EXPECT_TRUE(r.message.payload.at("reviewed"));
+  const auto session_pipeline = s.register_pipeline(R"(laso: "1"
+name: plugin-session-context
+version: 1
+nodes:
+  generate:
+    type: agent
+    model: plugin-model
+    prompt: Continue the session.
+edges:
+  - {from: input, to: generate}
+  - {from: generate, to: output}
+)")
+                                    .at("id")
+                                    .get<std::string>();
+  const auto session = s.create_session(session_pipeline);
+  (void)s.create_session_context_generation(session.id, 0, 0, "plugin-context-1",
+                                            "structured-context", "1", Json{{"key", "value"}});
+  io.restart();
+  const auto turn = s.submit_session_turn(session.id, "plugin-session-turn", Json{{"input", "go"}});
+  io.run();
+  const auto completed = s.get(RecordKind::SessionTurn, turn.at("id").get<std::string>());
+  ASSERT_EQ(completed.at("state"), "succeeded");
+  const auto session_run = s.get(RecordKind::Run, completed.at("run_id").get<std::string>());
+  EXPECT_TRUE(session_run.at("message").at("payload").at("session_context_received"));
   const auto provenance = std::find_if(
       r.message.provenance.begin(), r.message.provenance.end(), [](const ProvenanceRecord &item) {
         return item.provider == "example-model" && item.model == "offline-example";
@@ -2971,7 +3282,8 @@ TEST(Api, HealthAndVersion) {
   EXPECT_EQ(version.body.at("version"), "0.1.0-rc.1");
   EXPECT_EQ(version.body.at("capabilities"),
             (Json{"sessions.durable", "sessions.ordered_turns", "sessions.sequential_execution",
-                  "sessions.event_replay", "sessions.sse"}));
+                  "sessions.event_replay", "sessions.sse", "sessions.context_generations",
+                  "sessions.run_context_snapshots"}));
 }
 TEST(Api, RegistersAndCreatesRun) {
   TemporaryDirectory dir;

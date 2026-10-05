@@ -413,6 +413,19 @@ Json Service::submit_session_turn(const std::string &id, const std::string &idem
   }
   return accepted;
 }
+Json Service::create_session_context_generation(
+    const std::string &id, std::uint64_t expected_generation, std::uint64_t through_turn_sequence,
+    const std::string &idempotency_key, const std::string &representation_kind,
+    const std::string &representation_version, const Json &payload) {
+  (void)agent_session(id);
+  return storage_->create_session_context_generation(id, expected_generation, through_turn_sequence,
+                                                     idempotency_key, representation_kind,
+                                                     representation_version, payload);
+}
+std::optional<Json> Service::latest_session_context_generation(const std::string &id) const {
+  (void)agent_session(id);
+  return storage_->latest_session_context_generation(id);
+}
 std::vector<Json> Service::session_events(const std::string &id, std::uint64_t after,
                                           std::size_t limit) const {
   (void)agent_session(id);

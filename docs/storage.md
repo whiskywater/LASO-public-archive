@@ -41,11 +41,16 @@ format. `Service` acquires a filesystem process lease before opening the databas
 PostgreSQL uses a bounded RAII connection pool per `PostgresStorage`; each
 transaction remains bound to one acquired connection. Pool size and acquisition
 timeout are configurable and pool diagnostics are bounded. Startup creates the
-configured validated schema and applies immutable version-1 through version-8
+configured validated schema and applies immutable version-1 through version-11
 migrations in a transaction. Version 3 adds event-source state and external-event
 claim records; version 4 adds durable worker jobs; version 6 adds coordination
 lease state; version 7 adds service-instance state; version 8 adds durable
-`NodeWork` records for eligible distributed branch execution. A session-held
+`NodeWork` records for eligible distributed branch execution. Version 11 adds
+durable session context-generation and run-context snapshot records. Context
+generation creation locks the session row and checks its expected generation
+number; turn/run binding takes the same lock and inserts the immutable run
+snapshot with the run/turn association. SQLite applies the matching substrate
+in schema version 8 under its existing single-instance transaction model. A session-held
 advisory lock
 still prevents two LASO services from owning the same database by default. In
 explicit `execution_mode: multi_instance`, schema migration uses a transaction

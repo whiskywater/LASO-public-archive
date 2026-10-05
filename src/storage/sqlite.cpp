@@ -28,7 +28,9 @@ std::string table(RecordKind kind) {
                                        "agent_sessions",
                                        "session_turns",
                                        "session_events",
-                                       "session_continuations"};
+                                       "session_continuations",
+                                       "session_context_generations",
+                                       "run_context_snapshots"};
   const auto index = static_cast<std::size_t>(kind);
   if (index >= names.size())
     throw Error(ErrorCode::Validation, "Unknown record kind");
@@ -91,19 +93,23 @@ SQLiteStorage::SQLiteStorage(const std::filesystem::path &path) : impl_(std::mak
   exec(raw, "PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON;");
   auto version_stmt = prepare(raw, "PRAGMA user_version");
   if (sqlite3_step(version_stmt.get()) != SQLITE_ROW ||
-      sqlite3_column_int(version_stmt.get(), 0) > 7)
+      sqlite3_column_int(version_stmt.get(), 0) > 8)
     throw Error(ErrorCode::Storage, "Unsupported database schema version");
   version_stmt.reset();
   exec(raw, "BEGIN IMMEDIATE");
   try {
-    for (std::size_t i = 0; i < 20; ++i) {
+    for (std::size_t i = 0; i < 22; ++i) {
       auto name = table(static_cast<RecordKind>(i));
       exec(raw, "CREATE TABLE IF NOT EXISTS " + name +
                     " (id TEXT PRIMARY KEY, run_id TEXT NOT NULL, body TEXT NOT NULL "
                     "CHECK(json_valid(body)), sequence INTEGER NOT NULL)");
       exec(raw, "CREATE INDEX IF NOT EXISTS " + name + "_run ON " + name + "(run_id,sequence)");
     }
-    exec(raw, "PRAGMA user_version=7; COMMIT");
+    exec(raw, "CREATE UNIQUE INDEX IF NOT EXISTS session_context_generation_number "
+              "ON session_context_generations(run_id,json_extract(body,'$.generation')); "
+              "CREATE UNIQUE INDEX IF NOT EXISTS session_context_generation_idempotency "
+              "ON session_context_generations(run_id,json_extract(body,'$.idempotency_key'));");
+    exec(raw, "PRAGMA user_version=8; COMMIT");
   } catch (...) {
     sqlite3_exec(raw, "ROLLBACK", nullptr, nullptr, nullptr);
     throw;
@@ -118,6 +124,9 @@ void SQLiteStorage::commit(const std::vector<Record> &records) {
     for (const auto &r : records) {
       if (r.id.empty())
         throw Error(ErrorCode::Validation, "Record id is empty");
+      if (r.kind == RecordKind::SessionContextGeneration ||
+          r.kind == RecordKind::RunContextSnapshot)
+        throw Error(ErrorCode::Conflict, "Session context records are immutable");
       auto name = table(r.kind);
       auto s = prepare(
           db,
@@ -507,6 +516,41 @@ bool SQLiteStorage::bind_session_turn_run(const std::string &session_id, const s
     turn.erase("dispatch_expires_at");
     session.active_run_id = run_id;
     session.updated_at = timestamp();
+    RunContextSnapshot snapshot;
+    snapshot.run_id = run_id;
+    snapshot.session_id = session_id;
+    snapshot.session_turn_id = turn_id;
+    snapshot.turn_sequence = turn.value("sequence", std::uint64_t{0});
+    snapshot.history_through_turn_sequence = snapshot.turn_sequence;
+    auto generation_stmt = prepare(
+        db, "SELECT body FROM session_context_generations WHERE run_id=? ORDER BY sequence DESC");
+    bind(generation_stmt.get(), 1, session_id);
+    if (sqlite3_step(generation_stmt.get()) == SQLITE_ROW) {
+      const auto generation = parse(generation_stmt.get()).get<SessionContextGeneration>();
+      if (generation.session_id != session_id ||
+          generation.through_turn_sequence >= snapshot.turn_sequence)
+        throw Error(ErrorCode::Conflict, "Session context generation is ahead of this turn");
+      snapshot.context_generation_id = generation.id;
+      snapshot.context_generation = generation.generation;
+      snapshot.context_generation_predecessor_id = generation.predecessor_id;
+      snapshot.context_through_turn_sequence = generation.through_turn_sequence;
+      snapshot.representation_kind = generation.representation_kind;
+      snapshot.representation_version = generation.representation_version;
+    }
+    auto continuations = prepare(db, "SELECT body FROM session_continuations WHERE run_id=?");
+    bind(continuations.get(), 1, session_id);
+    while (sqlite3_step(continuations.get()) == SQLITE_ROW) {
+      const auto continuation = parse(continuations.get());
+      if (continuation.value("scope", std::string{}) == "current" &&
+          continuation.value("session_id", std::string{}) == session_id &&
+          !continuation.value("provider_id", std::string{}).empty() &&
+          !continuation.value("provider_version", std::string{}).empty() &&
+          !continuation.value("state", std::string{}).empty())
+        snapshot.provider_continuations.push_back(
+            {{"provider_id", continuation.at("provider_id")},
+             {"provider_version", continuation.at("provider_version")},
+             {"state", continuation.at("state")}});
+    }
     const auto sequence = session.next_sequence++;
     session_event["id"] = session_event.value("id", uuid());
     session_event["session_id"] = session_id;
@@ -535,6 +579,24 @@ bool SQLiteStorage::bind_session_turn_run(const std::string &session_id, const s
     };
     write(RecordKind::Run, run_id, run_id, run);
     write(RecordKind::Event, run_event.at("id").get<std::string>(), run_id, run_event);
+    auto next_snapshot_sequence =
+        prepare(db, "SELECT COALESCE(MAX(sequence),0)+1 FROM run_context_snapshots");
+    if (sqlite3_step(next_snapshot_sequence.get()) != SQLITE_ROW)
+      throw Error(ErrorCode::Storage, "SQLite run context snapshot sequence lookup failed");
+    const auto snapshot_sequence = sqlite3_column_int64(next_snapshot_sequence.get(), 0);
+    next_snapshot_sequence.reset();
+    auto insert_snapshot =
+        prepare(db, "INSERT INTO run_context_snapshots(id,run_id,body,sequence) VALUES(?,?,?,?)");
+    if (sqlite3_bind_text(insert_snapshot.get(), 1, run_id.c_str(), static_cast<int>(run_id.size()),
+                          SQLITE_TRANSIENT) != SQLITE_OK)
+      throw Error(ErrorCode::Storage, "SQLite run context snapshot ID bind failed");
+    bind(insert_snapshot.get(), 2, run_id);
+    const auto snapshot_body = serialize(Json(snapshot));
+    bind(insert_snapshot.get(), 3, snapshot_body);
+    if (sqlite3_bind_int64(insert_snapshot.get(), 4, snapshot_sequence) != SQLITE_OK ||
+        sqlite3_step(insert_snapshot.get()) != SQLITE_DONE)
+      throw Error(ErrorCode::Storage,
+                  std::string("SQLite run context snapshot insert failed: ") + sqlite3_errmsg(db));
     auto update_turn = prepare(db, "UPDATE session_turns SET body=? WHERE id=?");
     const auto turn_body = serialize(turn);
     bind(update_turn.get(), 1, turn_body);
@@ -559,6 +621,114 @@ bool SQLiteStorage::bind_session_turn_run(const std::string &session_id, const s
       throw Error(ErrorCode::Storage, "SQLite session run binding update failed");
     exec(db, "COMMIT");
     return true;
+  } catch (...) {
+    sqlite3_exec(db, "ROLLBACK", nullptr, nullptr, nullptr);
+    throw;
+  }
+}
+
+Json SQLiteStorage::create_session_context_generation(const std::string &session_id,
+                                                      std::uint64_t expected_generation,
+                                                      std::uint64_t through_turn_sequence,
+                                                      const std::string &idempotency_key,
+                                                      const std::string &representation_kind,
+                                                      const std::string &representation_version,
+                                                      const Json &payload) {
+  if (session_id.empty() || session_id.size() > 128 || idempotency_key.empty() ||
+      idempotency_key.size() > 256 || representation_kind.empty() ||
+      representation_kind.size() > 128 || representation_version.empty() ||
+      representation_version.size() > 128 || payload.dump().size() > 1024 * 1024)
+    throw Error(ErrorCode::Validation, "Invalid session context generation");
+  std::lock_guard lock(impl_->mutex);
+  auto *db = impl_->db.get();
+  exec(db, "BEGIN IMMEDIATE");
+  try {
+    auto session = prepare(db, "SELECT body FROM agent_sessions WHERE id=?");
+    bind(session.get(), 1, session_id);
+    if (sqlite3_step(session.get()) != SQLITE_ROW)
+      throw Error(ErrorCode::NotFound, "Agent session not found");
+    auto existing = prepare(db, "SELECT body FROM session_context_generations WHERE run_id=? "
+                                "AND json_extract(body,'$.idempotency_key')=?");
+    bind(existing.get(), 1, session_id);
+    bind(existing.get(), 2, idempotency_key);
+    if (sqlite3_step(existing.get()) == SQLITE_ROW) {
+      auto prior = parse(existing.get()).get<SessionContextGeneration>();
+      if (prior.through_turn_sequence != through_turn_sequence ||
+          prior.representation_kind != representation_kind ||
+          prior.representation_version != representation_version || prior.payload != payload)
+        throw Error(ErrorCode::Conflict, "Context generation idempotency key was reused");
+      exec(db, "COMMIT");
+      return Json(prior);
+    }
+    std::uint64_t current_generation = 0;
+    std::uint64_t current_boundary = 0;
+    std::string predecessor_id;
+    auto generations = prepare(db, "SELECT body FROM session_context_generations WHERE run_id=? "
+                                   "ORDER BY sequence DESC LIMIT 1");
+    bind(generations.get(), 1, session_id);
+    if (sqlite3_step(generations.get()) == SQLITE_ROW) {
+      const auto latest = parse(generations.get()).get<SessionContextGeneration>();
+      current_generation = latest.generation;
+      current_boundary = latest.through_turn_sequence;
+      predecessor_id = latest.id;
+    }
+    generations.reset();
+    if (expected_generation != current_generation)
+      throw Error(ErrorCode::Conflict, "Session context generation revision is stale");
+    if (through_turn_sequence < current_boundary)
+      throw Error(ErrorCode::Conflict, "Context generation boundary cannot move backward");
+    if (current_generation >= static_cast<std::uint64_t>(std::numeric_limits<sqlite3_int64>::max()))
+      throw Error(ErrorCode::Capacity, "Session context generation number is exhausted");
+    if (through_turn_sequence >
+        static_cast<std::uint64_t>(std::numeric_limits<sqlite3_int64>::max()))
+      throw Error(ErrorCode::Capacity, "Session turn sequence is exhausted");
+    auto turns = prepare(
+        db,
+        "SELECT body,sequence FROM session_turns WHERE run_id=? AND sequence<=? ORDER BY sequence");
+    bind(turns.get(), 1, session_id);
+    if (sqlite3_bind_int64(turns.get(), 2, static_cast<sqlite3_int64>(through_turn_sequence)) !=
+        SQLITE_OK)
+      throw Error(ErrorCode::Storage, "SQLite context boundary bind failed");
+    std::uint64_t seen = 0;
+    while (sqlite3_step(turns.get()) == SQLITE_ROW) {
+      const auto turn = parse(turns.get());
+      const auto state = turn.value("state", std::string{});
+      if (static_cast<std::uint64_t>(sqlite3_column_int64(turns.get(), 1)) != ++seen ||
+          (state != "succeeded" && state != "failed" && state != "cancelled"))
+        throw Error(ErrorCode::Conflict, "Context generation boundary includes unfinished history");
+    }
+    if (seen != through_turn_sequence)
+      throw Error(ErrorCode::Validation, "Context generation boundary is outside session history");
+    SessionContextGeneration generation;
+    generation.session_id = session_id;
+    generation.generation = current_generation + 1;
+    generation.predecessor_id = predecessor_id;
+    generation.through_turn_sequence = through_turn_sequence;
+    generation.representation_kind = representation_kind;
+    generation.representation_version = representation_version;
+    generation.idempotency_key = idempotency_key;
+    generation.payload = payload;
+    auto next_sequence =
+        prepare(db, "SELECT COALESCE(MAX(sequence),0)+1 FROM session_context_generations");
+    if (sqlite3_step(next_sequence.get()) != SQLITE_ROW)
+      throw Error(ErrorCode::Storage, "SQLite context generation sequence lookup failed");
+    const auto sequence = sqlite3_column_int64(next_sequence.get(), 0);
+    next_sequence.reset();
+    auto insert = prepare(
+        db, "INSERT INTO session_context_generations(id,run_id,body,sequence) VALUES(?,?,?,?)");
+    const auto generation_body = serialize(Json(generation));
+    if (sqlite3_bind_text(insert.get(), 1, generation.id.c_str(),
+                          static_cast<int>(generation.id.size()), SQLITE_TRANSIENT) != SQLITE_OK)
+      throw Error(ErrorCode::Storage, "SQLite context generation ID bind failed");
+    bind(insert.get(), 2, session_id);
+    bind(insert.get(), 3, generation_body);
+    if (sqlite3_bind_int64(insert.get(), 4, sequence) != SQLITE_OK)
+      throw Error(ErrorCode::Storage, "SQLite context generation sequence bind failed");
+    if (sqlite3_step(insert.get()) != SQLITE_DONE)
+      throw Error(ErrorCode::Storage,
+                  std::string("SQLite context generation insert failed: ") + sqlite3_errmsg(db));
+    exec(db, "COMMIT");
+    return Json(generation);
   } catch (...) {
     sqlite3_exec(db, "ROLLBACK", nullptr, nullptr, nullptr);
     throw;
@@ -640,6 +810,9 @@ void SQLiteStorage::commit_session_run(const std::vector<Record> &records, const
     for (const auto &record : records) {
       if (record.id.empty())
         throw Error(ErrorCode::Validation, "Record id is empty");
+      if (record.kind == RecordKind::SessionContextGeneration ||
+          record.kind == RecordKind::RunContextSnapshot)
+        throw Error(ErrorCode::Conflict, "Session context records are immutable");
       const auto name = table(record.kind);
       auto stmt = prepare(
           db,
@@ -850,6 +1023,41 @@ std::vector<Json> SQLiteStorage::session_events(const std::string &session_id, s
   bind(stmt.get(), 1, session_id);
   sqlite3_bind_int64(stmt.get(), 2, static_cast<sqlite3_int64>(after));
   sqlite3_bind_int64(stmt.get(), 3, static_cast<sqlite3_int64>(limit));
+  std::vector<Json> result;
+  while (sqlite3_step(stmt.get()) == SQLITE_ROW)
+    result.push_back(parse(stmt.get()));
+  return result;
+}
+std::optional<Json>
+SQLiteStorage::latest_session_context_generation(const std::string &session_id) const {
+  if (session_id.empty() || session_id.size() > 128)
+    throw Error(ErrorCode::Validation, "Invalid agent session ID");
+  std::lock_guard lock(impl_->mutex);
+  auto query =
+      prepare(impl_->db.get(), "SELECT body FROM session_context_generations WHERE run_id=? "
+                               "ORDER BY sequence DESC LIMIT 1");
+  bind(query.get(), 1, session_id);
+  const auto result = sqlite3_step(query.get());
+  if (result == SQLITE_DONE)
+    return std::nullopt;
+  if (result != SQLITE_ROW)
+    throw Error(ErrorCode::Storage, "SQLite context generation read failed");
+  return parse(query.get());
+}
+std::vector<Json> SQLiteStorage::session_turns_between(const std::string &session_id,
+                                                       std::uint64_t after, std::uint64_t through,
+                                                       std::size_t limit) const {
+  if (session_id.empty() || session_id.size() > 128 || through < after || limit == 0 ||
+      limit > 1000 ||
+      through > static_cast<std::uint64_t>(std::numeric_limits<sqlite3_int64>::max()))
+    throw Error(ErrorCode::Validation, "Invalid session turn range");
+  std::lock_guard lock(impl_->mutex);
+  auto stmt = prepare(impl_->db.get(), "SELECT body FROM session_turns WHERE run_id=? AND "
+                                       "sequence>? AND sequence<=? ORDER BY sequence LIMIT ?");
+  bind(stmt.get(), 1, session_id);
+  sqlite3_bind_int64(stmt.get(), 2, static_cast<sqlite3_int64>(after));
+  sqlite3_bind_int64(stmt.get(), 3, static_cast<sqlite3_int64>(through));
+  sqlite3_bind_int64(stmt.get(), 4, static_cast<sqlite3_int64>(limit));
   std::vector<Json> result;
   while (sqlite3_step(stmt.get()) == SQLITE_ROW)
     result.push_back(parse(stmt.get()));

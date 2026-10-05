@@ -96,7 +96,8 @@ ApiResponse Api::route(const std::string &method, const std::string &target, con
              {"plugin_abi", 1},
              {"capabilities",
               {"sessions.durable", "sessions.ordered_turns", "sessions.sequential_execution",
-               "sessions.event_replay", "sessions.sse"}}}};
+               "sessions.event_replay", "sessions.sse", "sessions.context_generations",
+               "sessions.run_context_snapshots"}}}};
   if (method == "GET" && target == "/api/v1/providers")
     return {200, service_.providers()};
   if (method == "GET" && target == "/api/v1/tools")
@@ -105,13 +106,60 @@ ApiResponse Api::route(const std::string &method, const std::string &target, con
     return {200, service_.plugins()};
   if (method == "GET" && target == "/api/v1/instances")
     return {200, service_.instances()};
+  static const std::regex session_context_route(
+      "/api/v1/sessions/([A-Za-z0-9_.@-]{1,128})/context(?:/generations)?");
+  static const std::regex run_context_route("/api/v1/runs/([A-Za-z0-9_.@-]{1,128})/context");
+  std::smatch context_match;
+  if (std::regex_match(target, context_match, session_context_route)) {
+    const auto session_id = context_match[1].str();
+    const bool generations_path = target.ends_with("/context/generations");
+    (void)service_.agent_session(session_id);
+    const auto public_generation = [](Json generation) {
+      generation.erase("payload");
+      generation.erase("idempotency_key");
+      return generation;
+    };
+    if (method == "GET" && !generations_path) {
+      const auto generation = service_.latest_session_context_generation(session_id);
+      return {
+          200,
+          {{"session_id", session_id},
+           {"current_generation", generation ? public_generation(*generation) : Json(nullptr)}}};
+    }
+    if (method == "POST" && generations_path) {
+      for (const auto *field : {"expected_generation", "through_turn_sequence", "idempotency_key",
+                                "representation_kind", "representation_version", "payload"})
+        if (!body.contains(field))
+          return {400, {{"error", "Context generation request is incomplete"}}};
+      auto generation = service_.create_session_context_generation(
+          session_id, body.at("expected_generation").get<std::uint64_t>(),
+          body.at("through_turn_sequence").get<std::uint64_t>(),
+          body.at("idempotency_key").get<std::string>(),
+          body.at("representation_kind").get<std::string>(),
+          body.at("representation_version").get<std::string>(), body.at("payload"));
+      return {201, public_generation(std::move(generation))};
+    }
+    return {405, {{"error", "Method not supported"}}};
+  }
+  if (method == "GET" && std::regex_match(target, context_match, run_context_route)) {
+    const auto snapshot = service_.get(RecordKind::RunContextSnapshot, context_match[1].str());
+    auto public_snapshot = snapshot;
+    Json continuation_metadata = Json::array();
+    for (const auto &continuation : snapshot.value("provider_continuations", Json::array()))
+      continuation_metadata.push_back(
+          {{"provider_id", continuation.value("provider_id", "")},
+           {"provider_version", continuation.value("provider_version", "")}});
+    public_snapshot["provider_continuations"] = std::move(continuation_metadata);
+    return {200, public_snapshot};
+  }
   std::smatch match;
-  static const std::regex route_pattern("/api/v1/"
-                                        "(pipelines|runs|approvals|worker-requests|schedules|"
-                                        "triggers|event-sources|workers|worker-jobs|sessions)(?:/"
-                                        "([A-Za-z0-9_.@-]{1,128}))?(?:/"
-                                        "(runs|cancel|resume|events|attempts|messages|approve|"
-                                        "reject|respond|answer|deny|enable|disable|turns|close))?");
+  static const std::regex route_pattern(
+      "/api/v1/"
+      "(pipelines|runs|approvals|worker-requests|schedules|"
+      "triggers|event-sources|workers|worker-jobs|sessions)(?:/"
+      "([A-Za-z0-9_.@-]{1,128}))?(?:/"
+      "(runs|cancel|resume|events|attempts|messages|approve|"
+      "reject|respond|answer|deny|enable|disable|turns|close|context))?");
   if (!std::regex_match(target, match, route_pattern))
     return {404, {{"error", "Endpoint not found"}}};
   auto collection = match[1].str(), id = match[2].str(), action = match[3].str();

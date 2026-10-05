@@ -21,6 +21,7 @@ struct ExecutionContext {
   std::string distributed_work_id, distributed_attempt_id;
   std::function<void(const std::string &)> worker_job_started;
   std::string session_id;
+  std::optional<SessionContext> session_context;
   std::function<std::optional<OpaqueProviderContinuation>(const std::string &)>
       load_provider_continuation;
   std::function<void(OpaqueProviderContinuation)> stage_provider_continuation;

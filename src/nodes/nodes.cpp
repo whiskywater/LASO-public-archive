@@ -13,7 +13,13 @@ Task<NodeResult> FunctionNode::execute(ExecutionContext &c, const Message &input
 Task<NodeResult> AgentNode::execute(ExecutionContext &c, const Message &input) {
   auto permit = co_await limiter_.acquire(c);
   ModelRequest request{binding_.model, prompt_, input.payload, binding_.options};
+  request.session_context = c.session_context;
   const auto metadata = provider_->metadata();
+  if (request.session_context &&
+      std::find(metadata.capabilities.begin(), metadata.capabilities.end(), "session-context") ==
+          metadata.capabilities.end())
+    throw Error(ErrorCode::Provider,
+                "Provider does not support the session context representation");
   if (!c.session_id.empty()) {
     if (metadata.continuation_mode == ContinuationMode::Unsupported)
       throw Error(ErrorCode::Provider, "Provider does not support session continuation");
