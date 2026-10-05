@@ -54,8 +54,8 @@ requires identical retries to return the original turn, conflicting reuse of an
 idempotency key to fail, concurrent submissions to receive one ordered sequence,
 closed sessions to reject new inputs, and the journal to survive service restart.
 PostgreSQL multi-instance acceptance also requires an event written through one
-service instance to be replayed and streamed by another. SQLite remains a
-single-instance backend.
+service instance to be replayed and streamed by another. PostgreSQL is required
+for single-owner and multi-instance deployments.
 
 This milestone stores accepted inputs; it does not claim they have run. PR #13
 adds no provider continuation state, turn dispatcher, execution lease, or worker

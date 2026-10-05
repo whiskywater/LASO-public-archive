@@ -63,10 +63,8 @@ the same as node-boundary validation.
 When `external_id` is supplied, `source_id + external_id` is a durable identity.
 The first accepted delivery inserts an external-event claim and the Event in one
 storage transaction. A retry returns `LASO_DUPLICATE` and the original event ID.
-Without an external ID, LASO does not fabricate exactly-once semantics. SQLite
-uses its serialized local adapter; PostgreSQL uses its existing single-service
-ownership lease and transactional claim. Neither promises distributed exactly
-once delivery.
+Without an external ID, LASO does not fabricate exactly-once semantics. PostgreSQL
+uses transactional claims. This does not promise distributed exactly-once delivery.
 
 ## Trigger integration and provenance
 

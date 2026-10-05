@@ -5,22 +5,74 @@
 #include <gtest/gtest.h>
 #include <laso/application/service.hpp>
 #include <laso/pipeline/parser.hpp>
-#if defined(LASO_HAS_POSTGRES)
 #include <version>
 #ifdef __cpp_lib_source_location
 #undef __cpp_lib_source_location
 #endif
+#include <mutex>
 #include <pqxx/pqxx>
-#endif
 #include <vector>
 
 namespace laso::test {
+inline std::string test_dsn() {
+  const auto *dsn = std::getenv("LASO_TEST_POSTGRES_DSN");
+  if (!dsn || !*dsn)
+    throw Error(ErrorCode::Configuration, "LASO_TEST_POSTGRES_DSN is required for tests");
+  return dsn;
+}
+inline std::mutex &schema_registry_mutex() {
+  static std::mutex mutex;
+  return mutex;
+}
+inline std::vector<std::pair<std::string, std::string>> &schema_registry() {
+  static std::vector<std::pair<std::string, std::string>> schemas;
+  return schemas;
+}
+inline std::string schema_for(const std::filesystem::path &path) {
+  const auto value = path.lexically_normal().string();
+  std::uint64_t hash = 1469598103934665603ULL;
+  for (const auto c : value) {
+    hash ^= static_cast<unsigned char>(c);
+    hash *= 1099511628211ULL;
+  }
+  const auto schema = "laso_test_" + std::to_string(hash);
+  {
+    std::lock_guard lock(schema_registry_mutex());
+    const auto parent = path.parent_path().lexically_normal().string();
+    if (std::find(schema_registry().begin(), schema_registry().end(), std::pair{parent, schema}) ==
+        schema_registry().end())
+      schema_registry().emplace_back(parent, schema);
+  }
+  return schema;
+}
+inline void drop_schema(const std::string &schema) noexcept {
+  try {
+    pqxx::connection connection(test_dsn());
+    pqxx::work transaction(connection);
+    transaction.exec("DROP SCHEMA IF EXISTS \"" + schema + "\" CASCADE");
+    transaction.commit();
+  } catch (...) {
+  }
+}
 struct TemporaryDirectory {
   std::filesystem::path path = std::filesystem::temp_directory_path() / ("laso-test-" + uuid());
   TemporaryDirectory() {
     std::filesystem::create_directories(path);
   }
   ~TemporaryDirectory() {
+    std::vector<std::string> schemas;
+    {
+      std::lock_guard lock(schema_registry_mutex());
+      for (auto i = schema_registry().begin(); i != schema_registry().end();) {
+        if (i->first == path.lexically_normal().string()) {
+          schemas.push_back(i->second);
+          i = schema_registry().erase(i);
+        } else
+          ++i;
+      }
+    }
+    for (const auto &schema : schemas)
+      drop_schema(schema);
     std::error_code ec;
     std::filesystem::remove_all(path, ec);
   }
@@ -28,58 +80,54 @@ struct TemporaryDirectory {
 inline Config config(const std::filesystem::path &dir) {
   Config c;
   c.data_dir = dir;
+  c.postgres_dsn = test_dsn();
+  c.postgres_schema = schema_for(dir / "service");
   c.validate();
   return c;
 }
 inline std::unique_ptr<Storage> make_storage(const std::filesystem::path &path) {
   StorageOptions options;
-  options.backend = "sqlite";
-  options.db_path = path;
+  options.postgres_dsn = test_dsn();
+  options.postgres_schema = schema_for(path);
+  options.allow_multiple_processes = true;
   return create_storage(options);
 }
-struct StorageBackend {
+struct StorageFixture {
   std::string name;
   std::function<std::unique_ptr<Storage>(const std::filesystem::path &)> open;
   std::function<void()> cleanup;
 };
-inline std::vector<StorageBackend> storage_backends() {
-  std::vector<StorageBackend> backends;
-  backends.push_back({"sqlite", make_storage, {}});
-#if defined(LASO_HAS_POSTGRES)
-  if (const auto *dsn = std::getenv("LASO_TEST_POSTGRES_DSN"); dsn && *dsn) {
-    const auto dsn_copy = std::string(dsn);
-    auto schema = "laso_test_" + uuid();
-    std::replace(schema.begin(), schema.end(), '-', '_');
-    backends.push_back({"postgres",
-                        [dsn_copy, schema](const std::filesystem::path &) {
-                          StorageOptions options;
-                          options.backend = "postgres";
-                          options.postgres_dsn = dsn_copy;
-                          options.postgres_schema = schema;
-                          return create_storage(options);
-                        },
-                        [dsn_copy, schema] {
-                          pqxx::connection connection(dsn_copy);
-                          pqxx::work transaction(connection);
-                          transaction.exec("DROP SCHEMA IF EXISTS \"" + schema + "\" CASCADE");
-                          transaction.commit();
-                        }});
-  }
-#endif
-  return backends;
+inline std::vector<StorageFixture> storage_fixtures() {
+  const auto schema = "laso_test_" + uuid();
+  auto safe_schema = schema;
+  std::replace(safe_schema.begin(), safe_schema.end(), '-', '_');
+  const auto dsn = test_dsn();
+  return {{"postgres",
+           [dsn, safe_schema](const std::filesystem::path &) {
+             StorageOptions options;
+             options.postgres_dsn = dsn;
+             options.postgres_schema = safe_schema;
+             return create_storage(options);
+           },
+           [dsn, safe_schema] {
+             pqxx::connection connection(dsn);
+             pqxx::work transaction(connection);
+             transaction.exec("DROP SCHEMA IF EXISTS \"" + safe_schema + "\" CASCADE");
+             transaction.commit();
+           }}};
 }
-template <typename Function> inline void for_each_storage_backend(Function &&function) {
-  for (auto &backend : storage_backends()) {
-    SCOPED_TRACE(backend.name);
+template <typename Function> inline void for_each_storage_fixture(Function &&function) {
+  for (auto &fixture : storage_fixtures()) {
+    SCOPED_TRACE(fixture.name);
     try {
-      function(backend);
+      function(fixture);
     } catch (...) {
-      if (backend.cleanup)
-        backend.cleanup();
+      if (fixture.cleanup)
+        fixture.cleanup();
       throw;
     }
-    if (backend.cleanup)
-      backend.cleanup();
+    if (fixture.cleanup)
+      fixture.cleanup();
   }
 }
 inline std::string fixture(const std::string &name) {

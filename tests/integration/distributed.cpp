@@ -13,7 +13,6 @@
 using namespace laso;
 using namespace laso::test;
 
-#if defined(LASO_HAS_POSTGRES)
 namespace {
 std::string test_dsn() {
   const auto *value = std::getenv("LASO_TEST_POSTGRES_DSN");
@@ -61,8 +60,6 @@ struct IsolatedSchema {
     std::replace(schema.begin(), schema.end(), '-', '_');
   }
   ~IsolatedSchema() {
-    if (dsn.empty())
-      return;
     try {
       pqxx::connection connection(dsn);
       pqxx::work transaction(connection);
@@ -76,12 +73,9 @@ struct IsolatedSchema {
 
 TEST(DistributedExecution, TwoServicesSharePostgresAndOneCompletesQueuedRun) {
   IsolatedSchema database;
-  if (database.dsn.empty())
-    GTEST_SKIP() << "LASO_TEST_POSTGRES_DSN is not configured";
   TemporaryDirectory first_data;
   TemporaryDirectory second_data;
   Config first = config(first_data.path);
-  first.storage_backend = "postgres";
   first.postgres_dsn = database.dsn;
   first.postgres_schema = database.schema;
   first.execution_mode = "multi_instance";
@@ -89,7 +83,6 @@ TEST(DistributedExecution, TwoServicesSharePostgresAndOneCompletesQueuedRun) {
   first.validate();
   auto second = first;
   second.data_dir = second_data.path;
-  second.db_path.clear();
 
   Executor first_executor(first.workers), second_executor(second.workers);
   Service first_service(first_executor.context(), first);
@@ -135,12 +128,9 @@ edges:
 
 TEST(DistributedExecution, ShortLeaseRenewsDuringLongAsyncWork) {
   IsolatedSchema database;
-  if (database.dsn.empty())
-    GTEST_SKIP() << "LASO_TEST_POSTGRES_DSN is not configured";
   TemporaryDirectory first_data;
   TemporaryDirectory second_data;
   Config first = config(first_data.path);
-  first.storage_backend = "postgres";
   first.postgres_dsn = database.dsn;
   first.postgres_schema = database.schema;
   first.execution_mode = "multi_instance";
@@ -152,7 +142,6 @@ TEST(DistributedExecution, ShortLeaseRenewsDuringLongAsyncWork) {
   first.validate();
   auto second = first;
   second.data_dir = second_data.path;
-  second.db_path.clear();
 
   Executor first_executor(first.workers), second_executor(second.workers);
   Service first_service(first_executor.context(), first);
@@ -276,12 +265,9 @@ edges:
 
 TEST(DistributedExecution, SubpipelineReleasesParentOwnershipWhileChildRuns) {
   IsolatedSchema database;
-  if (database.dsn.empty())
-    GTEST_SKIP() << "LASO_TEST_POSTGRES_DSN is not configured";
   TemporaryDirectory first_data;
   TemporaryDirectory second_data;
   Config first = config(first_data.path);
-  first.storage_backend = "postgres";
   first.postgres_dsn = database.dsn;
   first.postgres_schema = database.schema;
   first.execution_mode = "multi_instance";
@@ -289,7 +275,6 @@ TEST(DistributedExecution, SubpipelineReleasesParentOwnershipWhileChildRuns) {
   first.validate();
   auto second = first;
   second.data_dir = second_data.path;
-  second.db_path.clear();
 
   Executor first_executor(first.workers), second_executor(second.workers);
   Service first_service(first_executor.context(), first);
@@ -355,12 +340,9 @@ edges:
 
 TEST(DistributedExecution, ApprovalReleasesRunForAnyInstanceToResume) {
   IsolatedSchema database;
-  if (database.dsn.empty())
-    GTEST_SKIP() << "LASO_TEST_POSTGRES_DSN is not configured";
   TemporaryDirectory first_data;
   TemporaryDirectory second_data;
   Config first = config(first_data.path);
-  first.storage_backend = "postgres";
   first.postgres_dsn = database.dsn;
   first.postgres_schema = database.schema;
   first.execution_mode = "multi_instance";
@@ -368,7 +350,6 @@ TEST(DistributedExecution, ApprovalReleasesRunForAnyInstanceToResume) {
   first.validate();
   auto second = first;
   second.data_dir = second_data.path;
-  second.db_path.clear();
 
   Executor first_executor(first.workers), second_executor(second.workers);
   Service first_service(first_executor.context(), first);
@@ -421,12 +402,9 @@ edges:
 
 TEST(DistributedExecution, ParallelBranchesUseDurableNodeWork) {
   IsolatedSchema database;
-  if (database.dsn.empty())
-    GTEST_SKIP() << "LASO_TEST_POSTGRES_DSN is not configured";
   TemporaryDirectory first_data;
   TemporaryDirectory second_data;
   Config first = config(first_data.path);
-  first.storage_backend = "postgres";
   first.postgres_dsn = database.dsn;
   first.postgres_schema = database.schema;
   first.execution_mode = "multi_instance";
@@ -438,7 +416,6 @@ TEST(DistributedExecution, ParallelBranchesUseDurableNodeWork) {
   first.validate();
   auto second = first;
   second.data_dir = second_data.path;
-  second.db_path.clear();
 
   Executor first_executor(first.workers), second_executor(second.workers);
   Service first_service(first_executor.context(), first);
@@ -508,12 +485,9 @@ edges:
 
 TEST(DistributedExecution, DistributedBranchRetriesKeepDistinctAttempts) {
   IsolatedSchema database;
-  if (database.dsn.empty())
-    GTEST_SKIP() << "LASO_TEST_POSTGRES_DSN is not configured";
   TemporaryDirectory first_data;
   TemporaryDirectory second_data;
   Config first = config(first_data.path);
-  first.storage_backend = "postgres";
   first.postgres_dsn = database.dsn;
   first.postgres_schema = database.schema;
   first.execution_mode = "multi_instance";
@@ -525,7 +499,6 @@ TEST(DistributedExecution, DistributedBranchRetriesKeepDistinctAttempts) {
   first.validate();
   auto second = first;
   second.data_dir = second_data.path;
-  second.db_path.clear();
 
   Executor first_executor(first.workers), second_executor(second.workers);
   Service first_service(first_executor.context(), first);
@@ -598,14 +571,8 @@ edges:
 
 TEST(DistributedExecution, ProcessCrashAllowsNodeWorkTakeoverAndRunRecovery) {
   IsolatedSchema database;
-  if (database.dsn.empty())
-    GTEST_SKIP() << "LASO_TEST_POSTGRES_DSN is not configured";
-#if !defined(LASO_DISTRIBUTED_PROCESS)
-  GTEST_SKIP() << "distributed process fixture is not built";
-#else
   TemporaryDirectory directory;
   Config configuration = config(directory.path);
-  configuration.storage_backend = "postgres";
   configuration.postgres_dsn = database.dsn;
   configuration.postgres_schema = database.schema;
   configuration.execution_mode = "multi_instance";
@@ -723,19 +690,15 @@ edges:
     }
   }
   EXPECT_TRUE(retaken);
-#endif
 }
 
 TEST(DistributedExecution, SessionTurnRecoversAfterOwnerProcessDiesDuringExecution) {
   IsolatedSchema database;
-  if (database.dsn.empty())
-    GTEST_SKIP() << "LASO_TEST_POSTGRES_DSN is not configured";
 #if !defined(LASO_DISTRIBUTED_PROCESS)
   GTEST_SKIP() << "distributed process fixture is not built";
 #else
   TemporaryDirectory directory;
   Config configuration = config(directory.path);
-  configuration.storage_backend = "postgres";
   configuration.postgres_dsn = database.dsn;
   configuration.postgres_schema = database.schema;
   configuration.execution_mode = "multi_instance";
@@ -771,7 +734,6 @@ edges:
   }
 
   StorageOptions storage_options;
-  storage_options.backend = "postgres";
   storage_options.postgres_dsn = database.dsn;
   storage_options.postgres_schema = database.schema;
   storage_options.allow_multiple_processes = true;
@@ -878,13 +840,10 @@ edges:
 }
 
 TEST(DistributedExecution, SessionTurnRecoversAfterHardWorkerProcessDeath) {
-#if defined(LASO_HAS_POSTGRES) && defined(LASO_DISTRIBUTED_PROCESS)
+#if defined(LASO_DISTRIBUTED_PROCESS)
   IsolatedSchema database;
-  if (database.dsn.empty())
-    GTEST_SKIP() << "LASO_TEST_POSTGRES_DSN is not configured";
   TemporaryDirectory directory;
   Config configuration = config(directory.path);
-  configuration.storage_backend = "postgres";
   configuration.postgres_dsn = database.dsn;
   configuration.postgres_schema = database.schema;
   configuration.execution_mode = "multi_instance";
@@ -922,7 +881,6 @@ edges:
   }
 
   StorageOptions storage_options;
-  storage_options.backend = "postgres";
   storage_options.postgres_dsn = database.dsn;
   storage_options.postgres_schema = database.schema;
   storage_options.allow_multiple_processes = true;
@@ -1065,16 +1023,11 @@ edges:
               1);
     EXPECT_FALSE(current.value("cancellation_requested", false));
   }
-#else
-  GTEST_SKIP() << "PostgreSQL process recovery fixture is not enabled";
 #endif
 }
 
 TEST(DistributedExecution, SessionProcessCrashBoundariesRecoverDurably) {
-#if defined(LASO_HAS_POSTGRES) && defined(LASO_ENABLE_SESSION_TEST_HOOKS) &&                       \
-    defined(LASO_DISTRIBUTED_PROCESS)
-  if (test_dsn().empty())
-    GTEST_SKIP() << "LASO_TEST_POSTGRES_DSN is not configured";
+#if defined(LASO_ENABLE_SESSION_TEST_HOOKS) && defined(LASO_DISTRIBUTED_PROCESS)
   const auto pipeline = R"yaml(
 laso: '1'
 name: session-process-crash-boundary
@@ -1094,7 +1047,6 @@ edges:
     IsolatedSchema database;
     TemporaryDirectory directory;
     Config configuration = config(directory.path);
-    configuration.storage_backend = "postgres";
     configuration.postgres_dsn = database.dsn;
     configuration.postgres_schema = database.schema;
     configuration.execution_mode = "multi_instance";
@@ -1117,7 +1069,6 @@ edges:
     }
 
     StorageOptions storage_options;
-    storage_options.backend = "postgres";
     storage_options.postgres_dsn = database.dsn;
     storage_options.postgres_schema = database.schema;
     storage_options.allow_multiple_processes = true;
@@ -1218,18 +1169,12 @@ edges:
               1)
         << "boundary=" << boundary;
   }
-#else
-  GTEST_SKIP() << "PostgreSQL session crash hooks and process fixture are not enabled";
 #endif
 }
 
 TEST(DistributedExecution, StaleNodeCompletionIsRejectedByFencing) {
   IsolatedSchema database;
-  if (database.dsn.empty())
-    GTEST_SKIP() << "LASO_TEST_POSTGRES_DSN is not configured";
-#if defined(LASO_HAS_POSTGRES)
   StorageOptions storage_options;
-  storage_options.backend = "postgres";
   storage_options.postgres_dsn = database.dsn;
   storage_options.postgres_schema = database.schema;
   storage_options.allow_multiple_processes = true;
@@ -1281,19 +1226,12 @@ TEST(DistributedExecution, StaleNodeCompletionIsRejectedByFencing) {
                         "node:" + work.id, current->owner_instance, current->fencing_token);
   EXPECT_EQ(storage->get(RecordKind::NodeWork, work.id).get<NodeWork>().state,
             NodeWorkState::Completed);
-#else
-  GTEST_SKIP() << "PostgreSQL backend is not enabled";
-#endif
 }
 
 TEST(DistributedExecution, CancellationPropagatesToRemoteNodeWork) {
   IsolatedSchema database;
-  if (database.dsn.empty())
-    GTEST_SKIP() << "LASO_TEST_POSTGRES_DSN is not configured";
-#if defined(LASO_DISTRIBUTED_PROCESS)
   TemporaryDirectory directory;
   Config configuration = config(directory.path);
-  configuration.storage_backend = "postgres";
   configuration.postgres_dsn = database.dsn;
   configuration.postgres_schema = database.schema;
   configuration.execution_mode = "multi_instance";
@@ -1358,19 +1296,12 @@ edges:
   ASSERT_EQ(result.state, RunState::Cancelled);
   for (const auto &value : controller.list(RecordKind::NodeWork, run_id))
     EXPECT_EQ(value.get<NodeWork>().state, NodeWorkState::Cancelled);
-#else
-  GTEST_SKIP() << "distributed process fixture is not built";
-#endif
 }
 
 TEST(DistributedExecution, TimedOutWorkerAttemptReconcilesNodeWork) {
   IsolatedSchema database;
-  if (database.dsn.empty())
-    GTEST_SKIP() << "LASO_TEST_POSTGRES_DSN is not configured";
-#if defined(LASO_DISTRIBUTED_PROCESS)
   TemporaryDirectory directory;
   Config configuration = config(directory.path);
-  configuration.storage_backend = "postgres";
   configuration.postgres_dsn = database.dsn;
   configuration.postgres_schema = database.schema;
   configuration.execution_mode = "multi_instance";
@@ -1451,19 +1382,4 @@ edges:
   ASSERT_EQ(jobs.size(), 2U);
   for (const auto &value : jobs)
     EXPECT_EQ(value.at("status"), "TimedOut");
-#else
-  GTEST_SKIP() << "distributed process fixture is not built";
-#endif
 }
-
-TEST(DistributedExecution, MultiInstanceRejectsSQLite) {
-  TemporaryDirectory directory;
-  auto configuration = config(directory.path);
-  configuration.execution_mode = "multi_instance";
-  EXPECT_THROW(configuration.validate(), Error);
-}
-#else
-TEST(DistributedExecution, PostgreSQLBackendNotBuilt) {
-  GTEST_SKIP() << "LASO_ENABLE_POSTGRES is not enabled";
-}
-#endif

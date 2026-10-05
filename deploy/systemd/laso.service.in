@@ -12,6 +12,7 @@ Group=@LASO_SYSTEMD_SERVICE_GROUP@
 ExecStart="@CMAKE_INSTALL_FULL_BINDIR@/laso-server" --config "@LASO_SYSTEMD_CONFIG_FILE@"
 WorkingDirectory=/var/lib/@LASO_SYSTEMD_STATE_NAME@
 Environment=LASO_DATA_DIR=/var/lib/@LASO_SYSTEMD_STATE_NAME@
+EnvironmentFile=-/etc/laso/laso.env
 Environment=LASO_JSON_LOGS=true
 StandardOutput=journal
 StandardError=journal

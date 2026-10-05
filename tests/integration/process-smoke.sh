@@ -7,16 +7,30 @@ if [[ -z "$jq_bin" && -x "$source_dir/local-deps/root/usr/bin/jq" ]]; then
   jq_bin="$source_dir/local-deps/root/usr/bin/jq"
 fi
 [[ -n "$jq_bin" && -x "$jq_bin" ]] || { echo "jq is required" >&2; exit 77; }
+postgres_dsn=${LASO_TEST_POSTGRES_DSN:-${LASO_POSTGRES_DSN:-}}
+[[ -n "$postgres_dsn" ]] || { echo "PostgreSQL test DSN is required" >&2; exit 1; }
+command -v psql >/dev/null || { echo "psql is required for schema cleanup" >&2; exit 1; }
 jq() { "$jq_bin" "$@"; }
 temp=$(mktemp -d)
 server_pid=
+postgres_schema="laso_smoke_${$}"
 cleanup() {
+  local status=$?
   if [[ -n "$server_pid" ]]; then kill -TERM "$server_pid" 2>/dev/null || true; wait "$server_pid" || true; fi
+  for schema in "$postgres_schema" "${postgres_schema}_invalid"; do
+    psql "$postgres_dsn" -v ON_ERROR_STOP=1 -c \
+      "DROP SCHEMA IF EXISTS \"$schema\" CASCADE" >/dev/null || {
+      echo "could not clean up PostgreSQL test schema $schema" >&2
+      status=1
+    }
+  done
   rm -rf -- "$temp"
+  return "$status"
 }
 trap cleanup EXIT
 export LASO_DATA_DIR="$temp/state"
-unset LASO_CONFIG LASO_DB_PATH LASO_PLUGIN_DIR || true
+unset LASO_CONFIG LASO_PLUGIN_DIR || true
+export LASO_POSTGRES_SCHEMA="$postgres_schema"
 "$build/bin/laso" pipeline validate "$source_dir/examples/hello-pipeline/pipeline.yaml"
 "$build/bin/laso" run start "$source_dir/examples/hello-pipeline/pipeline.yaml" > "$temp/hello.json"
 jq -e '.state == "Completed"' "$temp/hello.json"
@@ -53,7 +67,6 @@ start_server
 curl -fsS "$base/version" | jq -e '.version == "0.1.0-rc.1"'
 cat > "$temp/occupied-port.yaml" <<EOF
 data_dir: "$temp/occupied-port-state"
-db_path: "$temp/occupied-port-state/laso.db"
 api_host: 127.0.0.1
 api_port: $port
 EOF
@@ -62,23 +75,23 @@ if env -u LASO_DATA_DIR "$build/bin/laso-server" --config "$temp/occupied-port.y
   echo "second server unexpectedly bound an occupied listener" >&2
   exit 1
 fi
-grep -Fq "Address already in use" "$temp/occupied-port.log" || {
-  echo "occupied-listener startup failure omitted its safe diagnostic" >&2
+grep -Fq "database is owned by another LASO process" "$temp/occupied-port.log" || {
+  echo "second single-owner startup failure omitted its safe diagnostic" >&2
   exit 1
 }
 printf 'not a directory\n' > "$temp/not-a-directory"
 cat > "$temp/invalid-state-path.yaml" <<EOF
 data_dir: "$temp/not-a-directory"
-db_path: "$temp/not-a-directory/laso.db"
 api_host: 127.0.0.1
 api_port: $((port + 1))
+postgres_schema: "${LASO_POSTGRES_SCHEMA}_invalid"
 EOF
-if env -u LASO_DATA_DIR "$build/bin/laso-server" --config "$temp/invalid-state-path.yaml" \
+if env -u LASO_DATA_DIR -u LASO_POSTGRES_SCHEMA "$build/bin/laso-server" --config "$temp/invalid-state-path.yaml" \
   >"$temp/invalid-state-path.log" 2>&1; then
   echo "server unexpectedly initialized under a non-directory state path" >&2
   exit 1
 fi
-grep -Fq "LASO server initialization failed:" "$temp/invalid-state-path.log" || {
+grep -Fq "Unable to create artifact object store" "$temp/invalid-state-path.log" || {
   echo "filesystem startup failure omitted its safe diagnostic" >&2
   exit 1
 }

@@ -19,9 +19,10 @@ ctest --test-dir build --output-on-failure
 ./build/bin/laso-server --config config/laso.example.yaml
 ```
 
-Local data defaults to `.laso`; root is not required. Run the CLI from the same
-working directory or use `LASO_DATA_DIR`. `LASO_DB_PATH` explicitly selects a
-database and takes precedence over the derived data-directory location.
+PostgreSQL is required for local and hosted runs. Set `LASO_POSTGRES_DSN` to a
+disposable development database before running the CLI or server. LASO's local
+artifact directory defaults to `.laso`; root is not required. Run the CLI from
+the same working directory or use `LASO_DATA_DIR`.
 
 ## systemd
 
@@ -43,6 +44,8 @@ if [ ! -e /etc/laso/laso.yaml ]; then
   sudo install -m 0640 -o root -g laso \
     /usr/local/share/laso/laso.systemd.example.yaml /etc/laso/laso.yaml
 fi
+sudo install -m 0600 /dev/null /etc/laso/laso.env
+# Add LASO_POSTGRES_DSN to /etc/laso/laso.env through the local secret-management process.
 sudo systemctl daemon-reload
 sudo systemctl enable --now laso
 curl -fsS http://127.0.0.1:8080/api/v1/health
@@ -79,7 +82,7 @@ Use `tests/acceptance/systemd-lifecycle.sh --preflight` for non-mutating
 prerequisite and unit checks. Its opt-in `--user` mode exercises a real transient
 systemd user service without root, but does not validate the dedicated system
 account or system-unit filesystem sandbox. Set
-`LASO_SYSTEMD_ACCEPTANCE_POSTGRES_DSN` and use `--user-postgres` to run the same
+`LASO_SYSTEMD_ACCEPTANCE_POSTGRES_DSN` and use `--user` to run the same
 recovery checks against a disposable database schema. Dedicated-account
 system-unit validation uses the installed `laso.service`; it requires root
 privileges and is not simulated by the user-mode harness. For controlled

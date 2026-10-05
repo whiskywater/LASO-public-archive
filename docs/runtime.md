@@ -9,20 +9,17 @@ error categories, and duration. Messages and events are durable.
 The configured storage adapter maintains separate records for pipelines, runs,
 attempts, messages, approvals, artifacts, events, event-source state, and durable
 external-event claims. Each row has an ID, indexed run ID, insertion sequence and
-JSON representation of the typed record. SQLite
-uses WAL, `synchronous=FULL`, a busy timeout, prepared parameter bindings and
-explicit transactions; its schema version is stored using `PRAGMA user_version`.
-The optional PostgreSQL adapter uses equivalent tables, identity-backed sequence
+JSON representation of the typed record. PostgreSQL uses identity-backed sequence
 values, parameterized libpqxx transactions, and a schema-local migration table.
-Both adapters reject newer schema versions instead of silently interpreting them.
+It rejects newer schema versions instead of silently interpreting them.
 
 Each successful node checkpoint includes its final attempt, output message, run
 cursor/branch queues and event in one transaction. A pending approval includes its
 request, waiting attempt and run state in one transaction. An approval decision and
 resumable queued state commit together. Storage history survives process restart.
 
-SQLite has a single-service ownership lease using Linux `flock`. PostgreSQL
-defaults to the same single-owner behavior using a session-held advisory lock.
+PostgreSQL defaults to single-owner behavior using a schema-scoped session-held
+advisory lock.
 With `execution_mode: multi_instance`, PostgreSQL instead permits multiple
 services and the runtime claims whole runs with database-time leases and fencing
 tokens. API readers share the same adapter. The run controller may persist

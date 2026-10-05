@@ -10,7 +10,6 @@
 
 namespace laso {
 struct CoordinationOptions {
-  std::string backend = "postgres";
   std::string postgres_dsn;
   std::string postgres_schema = "public";
   std::size_t pool_min_connections = 1;

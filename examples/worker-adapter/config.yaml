@@ -1,5 +1,4 @@
 data_dir: .laso-worker-example
-storage_backend: sqlite
 schema_roots: [examples/worker-adapter]
 plugin_dirs: [build/worker-plugins]
 worker_plugins:

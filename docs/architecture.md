@@ -1,14 +1,12 @@
 # Architecture and ownership
 
 The public API is C++20. The shared-library extension boundary is C. The framework
-release identifier (0.1.0-rc.1), YAML format (1), SQLite schema (5), and plugin ABI (1) are distinct.
+release identifier (0.1.0-rc.1), YAML format (1), PostgreSQL migration history, and plugin ABI (1) are distinct.
 
 | Target | Responsibility and dependencies |
 |---|---|
 | `laso_core` | Domain types, safe parser, config, policy contracts, registry, events, security and artifacts; no HTTP includes |
-| `laso_storage` | Backend-neutral storage factory and `Storage` boundary |
-| `laso_storage_sqlite` | Native SQLite C API behind `Storage`, transactional checkpoints |
-| `laso_storage_postgres` | Optional libpqxx backend behind `Storage`, transactional checkpoints |
+| `laso_storage` | Storage factory, generic `Storage` boundary, and required libpqxx PostgreSQL implementation |
 | `laso_plugin_loader` | Linux dynamic loader and C adapters for tools, model providers, and event sources |
 | `laso_runtime` | Async node execution, state transitions, durable scheduling and checkpoint decisions |
 | `laso_application` | Owns dependencies, registration, recovery inspection and shared services |
@@ -17,8 +15,8 @@ release identifier (0.1.0-rc.1), YAML format (1), SQLite schema (5), and plugin 
 
 Boost.Beast was selected because Ubuntu and Debian ship Boost, it supplies a
 maintained HTTP parser, and Asio also provides the execution/event-loop facilities.
-No custom HTTP parser or provider SDK is in the runtime. SQLite uses its small C
-API instead of an ORM, while the optional PostgreSQL adapter uses libpqxx. YAML and
+No custom HTTP parser or provider SDK is in the runtime. PostgreSQL uses libpqxx
+behind the generic storage interface. YAML and
 JSON remain at parsing and payload boundaries.
 
 Registries use shared mutexes and shared ownership of registered objects. Plugin
@@ -54,7 +52,7 @@ auto record = service.get(laso::RecordKind::Run, id);
 
 An `ExecutionContext` gives extensions run/node identity, attempt/visit number,
 cooperative stop token and a steady-clock deadline. `Task<T>` is an Asio awaitable.
-The baseline performs no external network or model calls. Short SQLite calls and
+The baseline performs no external network or model calls. Short PostgreSQL calls and
 v1 native callbacks are synchronous; future external I/O implementations must
 suspend rather than hold a worker on a blocking operation.
 

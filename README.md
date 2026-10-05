@@ -24,9 +24,9 @@ systemd deployment validation status, and the blocked host TSan run.
                      |
           +----------+----------+
           |          |          |
-        Nodes   Storage backends  Events
-                   /      \\
-               SQLite   PostgreSQL*
+        Nodes     Storage       Events
+                    |
+                PostgreSQL
           |
        Registries
           |
@@ -44,21 +44,24 @@ distribution; CMake fetches the pinned small MIT-licensed JSON Schema validator
 when it is not already available locally.
 
 See [build and install](docs/build.md) for the clean-clone dependency list,
-Debug/Release/sanitizer commands, PostgreSQL options, provider adapters, and
+Debug/Release/sanitizer commands, PostgreSQL setup, provider adapters, and
 installation layout.
 
-PostgreSQL is an optional build and runtime backend. Install `libpqxx-dev` and
-`libpq-dev`, configure with `-DLASO_ENABLE_POSTGRES=ON`, then select it with
-`storage_backend: postgres` and a `postgres_dsn` connection string (or the
-`LASO_STORAGE_BACKEND`, `LASO_POSTGRES_DSN`, and `LASO_POSTGRES_SCHEMA`
-environment variables). SQLite remains the default. DSNs are never included
-in LASO error messages or logs. PostgreSQL uses a bounded connection pool;
+PostgreSQL is required for every LASO deployment, including single-instance mode.
+Install `libpqxx-dev` and `libpq-dev`; set `postgres_dsn` in configuration or
+`LASO_POSTGRES_DSN` in the environment. LASO keeps the generic `Storage` boundary,
+with PostgreSQL as its sole shipped implementation. DSNs are never included in LASO
+error messages or logs. PostgreSQL uses a bounded connection pool;
 `postgres_pool_min_connections`, `postgres_pool_max_connections`, and
-`postgres_pool_acquisition_timeout_ms` tune it. Single-owner mode remains the
-default. PostgreSQL builds may opt into `execution_mode: multi_instance`; this
-enables durable run claiming and fencing for multiple LASO service processes.
-SQLite remains single-instance. See [distributed execution](docs/distributed-execution.md)
-for the exact ownership, crash-recovery, and non-exactly-once guarantees.
+`postgres_pool_acquisition_timeout_ms` tune it. Single-owner mode remains the default.
+`execution_mode: multi_instance` opts into durable run claiming and fencing for
+multiple LASO processes. See [distributed execution](docs/distributed-execution.md)
+for ownership, crash recovery, and delivery guarantees.
+
+This is a breaking storage change: SQLite is no longer supported and `db_path` and
+`storage_backend` have been removed. Existing `.laso/laso.db` state must be backed up
+and migrated before startup; LASO detects the default legacy file and refuses to
+start. No automatic SQLite-to-PostgreSQL importer is included.
 
 The OpenCode worker adapter is optional and disabled by default. Build it only
 when needed with `-DLASO_BUILD_OPENCODE_ADAPTER=ON`; native and generic
@@ -69,19 +72,22 @@ The Codex worker adapter is also optional and disabled by default. Build it with
 the same supervised process boundary. No Codex installation or account is
 required for the default build or tests. See [Codex worker](docs/codex-worker.md).
 
-The default build has no PostgreSQL development-library requirement. Produced
+Every build requires the PostgreSQL development libraries. Produced
 binaries are `build/bin/laso`, `build/bin/laso-server`, and
 `build/laso_tests`. Example C plugins are
 `build/plugins/liblaso_example_tool.so` and
 `build/plugins/liblaso_example_model_provider.so`; the offline worker example is
 `build/worker-plugins/liblaso_example_worker.so`. Core, runtime, storage factory,
-SQLite, optional PostgreSQL, plugin loader, application, API, and CLI are separate
+PostgreSQL adapter, plugin loader, application, API, and CLI are separate
 library targets. Installation includes the executables, public headers, C SDK
 header, example configuration, public documentation, and a prefix-configured
 systemd service unit. Disable it with `-DLASO_INSTALL_SYSTEMD_UNIT=OFF` for a
 user-local CLI-only install. A relocatable CMake SDK package is deferred.
 
 ## First pipeline
+
+Set `LASO_POSTGRES_DSN` to a PostgreSQL database before running any LASO CLI or
+server command. PostgreSQL is required in single-owner mode too.
 
 ```yaml
 laso: "1"
@@ -120,7 +126,7 @@ through registries; no shell command interpretation occurs. See
 ```
 
 The approval example exits with `WaitingApproval`. A later CLI process opens the
-same SQLite database, records the decision, and continues. `LASO_DATA_DIR` defaults
+same PostgreSQL schema, records the decision, and continues. `LASO_DATA_DIR` defaults
 to `.laso` relative to the working directory. The CLI is a local service adapter,
 not an HTTP command wrapper. Only one service process may own a database: while
 the daemon is running, use its API. Stop it before using local CLI database commands.
@@ -261,7 +267,7 @@ scope and remaining limitations in `VALIDATION.md`.
   interruption, owner-recovery, and integrity acceptance are closed; see
   `VALIDATION.md`. M4.1 adds an opt-in S3-compatible store. Remote S3 garbage
   collection is intentionally not supported in this milestone.
-- SQLite remains one-process only. PostgreSQL supports an explicit multi-instance
+- PostgreSQL single-owner mode runs one LASO process per schema. PostgreSQL supports an explicit multi-instance
   execution mode with bounded run claims, database-time leases, heartbeats,
   fencing tokens, crash takeover, and durable deterministic branch work. A run
   has one control owner at a time; eligible pure branch paths may execute on

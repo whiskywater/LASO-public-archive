@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Breaking changes
+
+- PostgreSQL is now required for all LASO deployments, including single-owner mode. Removed SQLite storage, the `storage_backend` selector, and `db_path`. Existing SQLite state is not imported; back it up and plan an application-specific export/import before upgrading. Startup detects the default `.laso/laso.db` file and refuses to continue until it is handled. See [storage upgrade guidance](docs/storage.md#upgrading-from-sqlite).
+
 ## 0.1.0-rc.1
 
 - Release-hardening pass: documented clean-clone builds, optional dependencies,

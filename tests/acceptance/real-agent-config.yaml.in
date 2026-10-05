@@ -1,5 +1,4 @@
 data_dir: @DATA_DIR@
-storage_backend: sqlite
 workers: 2
 max_runs: 4
 max_nodes: 8

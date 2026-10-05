@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 
 usage() {
-  echo "usage: $0 --preflight UNIT_FILE | --user INSTALL_PREFIX SOURCE_DIR | --user-postgres INSTALL_PREFIX SOURCE_DIR" >&2
+  echo "usage: $0 --preflight UNIT_FILE | --user INSTALL_PREFIX SOURCE_DIR" >&2
   exit 2
 }
 
@@ -33,24 +33,18 @@ if [[ "$mode" == --preflight ]]; then
   exit 0
 fi
 
-if [[ ("$mode" != --user && "$mode" != --user-postgres) || $# -ne 2 ]]; then
+if [[ "$mode" != --user || $# -ne 2 ]]; then
   usage
 fi
 prefix=$(realpath "$1")
 source_dir=$(realpath "$2")
-backend=sqlite
-postgres_dsn=
-postgres_schema=
-if [[ "$mode" == --user-postgres ]]; then
-  backend=postgres
-  postgres_dsn=${LASO_SYSTEMD_ACCEPTANCE_POSTGRES_DSN:-}
-  [[ -n "$postgres_dsn" ]] || {
-    echo "BLOCKED: LASO_SYSTEMD_ACCEPTANCE_POSTGRES_DSN is required" >&2
-    exit 77
-  }
-  command -v psql >/dev/null || { echo "BLOCKED: psql unavailable" >&2; exit 77; }
-  postgres_schema="laso_systemd_accept_$$"
-fi
+postgres_dsn=${LASO_SYSTEMD_ACCEPTANCE_POSTGRES_DSN:-${LASO_TEST_POSTGRES_DSN:-}}
+[[ -n "$postgres_dsn" ]] || {
+  echo "BLOCKED: LASO_SYSTEMD_ACCEPTANCE_POSTGRES_DSN is required" >&2
+  exit 77
+}
+command -v psql >/dev/null || { echo "BLOCKED: psql unavailable" >&2; exit 77; }
+postgres_schema="laso_systemd_accept_$$"
 server="$prefix/bin/laso-server"
 worker_host="$prefix/bin/laso-example-worker-host"
 [[ -x "$prefix/bin/laso" && -x "$server" && -x "$worker_host" ]] || {
@@ -110,8 +104,8 @@ trap cleanup EXIT
 
 cat >"$root/config.yaml" <<EOF
 data_dir: "$root/state"
-db_path: "$root/state/laso.db"
-storage_backend: $backend
+postgres_dsn: "$postgres_dsn"
+postgres_schema: "$postgres_schema"
 api_host: 127.0.0.1
 api_port: $port
 json_logs: true
@@ -123,12 +117,6 @@ process_workers:
     startup_timeout_ms: 5000
     request_timeout_ms: 5000
 EOF
-if [[ "$backend" == postgres ]]; then
-  cat >>"$root/config.yaml" <<EOF
-postgres_dsn: "$postgres_dsn"
-postgres_schema: "$postgres_schema"
-EOF
-fi
 sed "s|/var/lib/laso|$root/installed-example-state|g" \
   "$prefix/share/laso/laso.systemd.example.yaml" >"$root/installed-example.yaml"
 "$prefix/bin/laso" --config "$root/installed-example.yaml" health >/dev/null
@@ -187,7 +175,7 @@ approval_id=$(curl -fsS "$base/approvals" | jq -er \
   --arg run_id "$run_id" '[.[] | select(.run_id == $run_id) | .id][0]')
 
 # A normal systemd restart exercises SIGTERM and proves the approval checkpoint
-# is restored from SQLite rather than process-local state.
+# is restored from PostgreSQL rather than process-local state.
 old_child_pid=$child_pid
 systemctl --user restart "$unit"
 server_pid=$(systemctl --user show --property=MainPID --value "$unit")
@@ -289,7 +277,8 @@ probe_config_failure() {
   local name=$1 config=$2 diagnostic=$3 result=0 output
   bad_units+=("$name")
   output=$(systemd-run --user --unit="$name" --wait --pipe \
-    --property=Restart=no "$server" --config "$config" 2>&1) || result=$?
+    --property=Restart=no --property="WorkingDirectory=$root" \
+    "$server" --config "$config" 2>&1) || result=$?
   [[ "$result" -ne 0 ]] || { echo "invalid config unexpectedly succeeded" >&2; return 1; }
   if ! grep -Fq -- "$diagnostic" <<<"$output"; then
     echo "systemd failure unit $name omitted its expected safe diagnostic" >&2
@@ -308,17 +297,26 @@ probe_config_failure "${bad_unit%.service}-malformed.service" "$root/invalid.yam
   "Invalid configuration YAML"
 probe_config_failure "${bad_unit%.service}-missing.service" "$root/missing.yaml" \
   "Cannot open configuration file"
-printf 'storage_backend: postgres\n' >"$root/invalid-storage.yaml"
+cat >"$root/invalid-storage.yaml" <<EOF
+postgres_dsn: "$postgres_dsn"
+postgres_schema: 1invalid
+EOF
 probe_config_failure "${bad_unit%.service}-storage.service" "$root/invalid-storage.yaml" \
-  "PostgreSQL DSN is required"
-printf 'plugin_dirs: ["%s/missing-plugins"]\n' "$root" >"$root/invalid-plugin.yaml"
+  "Invalid PostgreSQL schema"
+cat >"$root/invalid-plugin.yaml" <<EOF
+postgres_dsn: "$postgres_dsn"
+plugin_dirs: ["$root/missing-plugins"]
+EOF
 probe_config_failure "${bad_unit%.service}-plugin.service" "$root/invalid-plugin.yaml" \
   "Configured plugin directory is unavailable"
-printf 'data_dir: "%s/readonly"\n' "$root" >"$root/unwritable.yaml"
+cat >"$root/unwritable.yaml" <<EOF
+postgres_dsn: "$postgres_dsn"
+data_dir: "$root/readonly"
+EOF
 mkdir "$root/readonly"
 chmod 0500 "$root/readonly"
 probe_config_failure "${bad_unit%.service}-state.service" "$root/unwritable.yaml" \
-  "Cannot open database process lease"
+  "Unable to create artifact object store"
 chmod 0700 "$root/readonly"
 printf 'data_dir: "%s/state"\n' "$root" >"$root/unreadable.yaml"
 chmod 000 "$root/unreadable.yaml"

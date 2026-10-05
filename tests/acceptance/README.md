@@ -52,12 +52,12 @@ that boundary.
 worker-claim path. It starts separate owner and worker LASO instances, requires
 `LASO_TEST_POSTGRES_DSN`, and exercises real Codex/OpenCode workers with an
 inline bounded workspace manifest. It exits 77 when PostgreSQL or a supported
-provider executable is unavailable; SQLite runs are not treated as distributed
+provider executable is unavailable; single-owner runs are not treated as distributed
 validation. The focused PostgreSQL suite covers concurrent claims, lease
 renewal/expiry, fencing, duplicate completion, cancellation recovery, and
 multi-instance recovery. The full worker-death, stale-live-worker, database
 interruption, and owner-recovery scenarios remain separate operational gates;
-they must not be inferred from SQLite or from a successful basic run.
+they must not be inferred from a successful basic run.
 
 The loopback-only `artifact-chaos-proxy.py` provides deterministic upload
 barriers for artifact failure experiments. It bounds declared upload size and

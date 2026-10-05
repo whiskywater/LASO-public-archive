@@ -1,5 +1,7 @@
 # M5.2 design: durable sequential turn execution
 
+> Historical design record. SQLite-specific passages describe the former backend policy and are superseded by [ADR 0009](adr/0009-postgres-only-storage.md); PostgreSQL is now required for all LASO deployments.
+
 ## Boundary
 
 M5.2 connects an M5.1 accepted session turn to one ordinary LASO pipeline run,

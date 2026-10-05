@@ -1,5 +1,4 @@
 data_dir: @DATA_DIR@
-storage_backend: postgres
 postgres_dsn: "@POSTGRES_DSN@"
 postgres_schema: "@POSTGRES_SCHEMA@"
 execution_mode: multi_instance

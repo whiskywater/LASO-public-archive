@@ -26,8 +26,7 @@ struct ProcessWorkerConfig {
                 interaction_timeout_ms = 300000;
 };
 struct Config {
-  std::filesystem::path data_dir = ".laso", db_path, artifact_root;
-  std::string storage_backend = "sqlite";
+  std::filesystem::path data_dir = ".laso", artifact_root;
   std::string postgres_dsn, postgres_schema = "public";
   std::string artifact_backend = "filesystem";
   std::string artifact_s3_endpoint, artifact_s3_bucket, artifact_s3_region = "us-east-1",

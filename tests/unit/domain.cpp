@@ -29,7 +29,6 @@ private:
   std::optional<std::string> previous_;
 };
 } // namespace
-static_assert(std::is_constructible_v<SQLiteStorage, const std::filesystem::path &>);
 TEST(Pipeline, ParsesTypedDefinition) {
   auto p = parse_pipeline(fixture("hello-pipeline"));
   EXPECT_EQ(p.name, "hello");
@@ -92,16 +91,52 @@ TEST(Pipeline, RejectsMalformedSubpipelineRevision) {
 }
 TEST(Configuration, ValidatesSubpipelineDepth) {
   Config c;
+  c.postgres_dsn = test_dsn();
   c.max_subpipeline_depth = 0;
   EXPECT_THROW(c.validate(), Error);
   c.max_subpipeline_depth = 16;
   EXPECT_NO_THROW(c.validate());
 }
-TEST(Configuration, RejectsUnsupportedStorageBackend) {
+TEST(Configuration, RefusesToIgnoreExistingDefaultSQLiteFile) {
+  TemporaryDirectory dir;
+  std::ofstream legacy(dir.path / "laso.db", std::ios::binary);
+  legacy.write("SQLite format 3\0", 16);
+  legacy.close();
   Config c;
-  c.storage_backend = "postgres";
+  c.data_dir = dir.path;
+  c.postgres_dsn = test_dsn();
   EXPECT_THROW(c.validate(), Error);
-  c.storage_backend = "sqlite";
+}
+TEST(Configuration, RefusesUnreadableLegacySQLiteFile) {
+  TemporaryDirectory dir;
+  const auto path = dir.path / "laso.db";
+  {
+    std::ofstream legacy(path, std::ios::binary);
+    legacy.write("SQLite format 3\0", 16);
+  }
+  std::filesystem::permissions(path, std::filesystem::perms::none);
+  Config c;
+  c.data_dir = dir.path;
+  try {
+    c.validate();
+    FAIL() << "configuration accepted unreadable legacy SQLite state";
+  } catch (const Error &error) {
+    EXPECT_STREQ(error.what(),
+                 "Legacy SQLite state detected; preserve it and migrate it before startup");
+  }
+  std::filesystem::permissions(path, std::filesystem::perms::owner_read |
+                                         std::filesystem::perms::owner_write);
+}
+TEST(Configuration, RejectsRemovedSQLiteConfigurationKeys) {
+  TemporaryDirectory dir;
+  const auto path = dir.path / "laso.yaml";
+  std::ofstream(path) << "db_path: /tmp/old.db\n";
+  EXPECT_THROW(load_config(path), Error);
+}
+TEST(Configuration, RequiresPostgresDsn) {
+  Config c;
+  EXPECT_THROW(c.validate(), Error);
+  c.postgres_dsn = test_dsn();
   EXPECT_NO_THROW(c.validate());
 }
 TEST(Configuration, ParsesDeclarativeEventSource) {
@@ -192,6 +227,7 @@ TEST(Configuration, S3ArtifactBackendIsOptionalAndExplicit) {
 TEST(Configuration, RejectsS3NamespaceEscapeAndUntrustedPlainHttp) {
 #ifdef LASO_HAS_S3
   Config config;
+  config.postgres_dsn = test_dsn();
   config.artifact_backend = "s3";
   config.artifact_s3_bucket = "laso-test-bucket";
   config.artifact_s3_prefix = "../outside";
@@ -207,6 +243,7 @@ TEST(Configuration, RejectsS3NamespaceEscapeAndUntrustedPlainHttp) {
 TEST(Configuration, S3OwnerCanExposeAuthenticatedArtifactGateway) {
 #ifdef LASO_HAS_S3
   Config config;
+  config.postgres_dsn = test_dsn();
   config.artifact_backend = "s3";
   config.artifact_s3_bucket = "laso-test-bucket";
   config.artifact_service_port = 9090;
@@ -345,6 +382,7 @@ TEST(Configuration, RejectsRemoteAnonymousDefault) {
   c.api_host = "0.0.0.0";
   EXPECT_THROW(c.validate(), Error);
   c.allow_remote_api = true;
+  c.postgres_dsn = test_dsn();
   EXPECT_NO_THROW(c.validate());
 }
 TEST(Configuration, RejectsZeroConcurrency) {
@@ -354,6 +392,7 @@ TEST(Configuration, RejectsZeroConcurrency) {
 }
 TEST(Configuration, BoundsSessionSseStreamCapacity) {
   Config c;
+  c.postgres_dsn = test_dsn();
   EXPECT_NO_THROW(c.validate());
   c.max_session_sse_streams = 0;
   EXPECT_THROW(c.validate(), Error);
@@ -364,6 +403,7 @@ TEST(Configuration, BoundsSessionSseStreamCapacity) {
 }
 TEST(Configuration, ValidatesContextReductionBudgets) {
   Config c;
+  c.postgres_dsn = "host=localhost dbname=laso_test";
   c.session_context_reduction_enabled = true;
   EXPECT_NO_THROW(c.validate());
   c.session_context_reduction_threshold_bytes = c.session_context_reduction_target_bytes;

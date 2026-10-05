@@ -371,10 +371,6 @@ private:
 
 std::unique_ptr<Coordination> create_coordination(const CoordinationOptions &options,
                                                   const std::string &owner_instance) {
-  if (options.backend != "postgres")
-    throw Error(ErrorCode::Configuration, options.backend == "sqlite"
-                                              ? "Coordination is not available for SQLite"
-                                              : "Unsupported coordination backend");
   return std::make_unique<PostgresCoordination>(options, owner_instance);
 }
 } // namespace laso

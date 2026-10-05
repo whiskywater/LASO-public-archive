@@ -1,5 +1,6 @@
+# Set LASO_POSTGRES_DSN in /etc/laso/laso.env. PostgreSQL is required.
 data_dir: /var/lib/laso
-db_path: /var/lib/laso/laso.db
+postgres_schema: public
 api_host: 127.0.0.1
 api_port: 8080
 workers: 2

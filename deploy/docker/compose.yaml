@@ -5,6 +5,7 @@ services:
     # Linux host networking preserves a loopback-only unauthenticated API.
     network_mode: host
     environment:
+      LASO_POSTGRES_DSN: ${LASO_POSTGRES_DSN:?Set LASO_POSTGRES_DSN before deployment}
       LASO_DATA_DIR: /var/lib/laso
       LASO_API_HOST: 127.0.0.1
       LASO_API_PORT: "8080"

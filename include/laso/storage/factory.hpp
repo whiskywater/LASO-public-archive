@@ -1,13 +1,10 @@
 #pragma once
-#include <filesystem>
 #include <laso/storage/storage.hpp>
 #include <memory>
 #include <string>
 
 namespace laso {
 struct StorageOptions {
-  std::string backend = "sqlite";
-  std::filesystem::path db_path;
   std::string postgres_dsn;
   std::string postgres_schema = "public";
   std::size_t postgres_pool_min_connections = 1;

@@ -1,4 +1,34 @@
+> Historical validation record: dated sections below describe earlier SQLite-first work and prior PostgreSQL validation. Current PostgreSQL-only validation appears in the final section.
+
 # Validation record
+
+## PostgreSQL-only storage validation (2026-09-26)
+
+All local database tests used a disposable PostgreSQL 16.15 cluster on loopback
+with a dedicated `laso_pr16_qa` database. No unrelated database service or schema
+was used. Tests exercised independent schemas and ran with deterministic session
+recovery hooks enabled.
+
+| Build | Configure/build/test | Result |
+|---|---|---|
+| Debug | `cmake -S . -B build-debug-final -G Ninja -DCMAKE_BUILD_TYPE=Debug -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DLASO_ENABLE_SESSION_TEST_HOOKS=ON`; `cmake --build build-debug-final --parallel 4`; `ctest --test-dir build-debug-final --output-on-failure --parallel 4` | **PASS: 264 total; 261 passed, 0 failed, 3 skipped** |
+| Release | `cmake -S . -B build-release-final -G Ninja -DCMAKE_BUILD_TYPE=Release -DLASO_ENABLE_SESSION_TEST_HOOKS=ON`; `cmake --build build-release-final --parallel 4`; `ctest --test-dir build-release-final --output-on-failure --parallel 4` | **PASS: 264 total; 261 passed, 0 failed, 3 skipped** |
+| ASan + UBSan | `cmake -S . -B build-sanitizers-final -G Ninja -DCMAKE_BUILD_TYPE=Debug -DLASO_ENABLE_SESSION_TEST_HOOKS=ON -DLASO_ENABLE_ASAN=ON -DLASO_ENABLE_UBSAN=ON`; `cmake --build build-sanitizers-final --parallel 4`; `ctest --test-dir build-sanitizers-final --output-on-failure --parallel 3` with `ASAN_OPTIONS=detect_leaks=1:halt_on_error=1` and `UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1` | **PASS: 264 total; 261 passed, 0 failed, 3 skipped** |
+
+The three skips in each suite were the two S3-only configuration checks in the
+non-S3 build and `distributed_m3_acceptance`, whose opt-in Codex/OpenCode agent
+executables were unavailable. The CTest PostgreSQL distributed, coordination,
+process-crash, session recovery, ownership, fencing, restart, CLI/API, schema
+migration/reopen, and connection failure cases all ran. The separate M3 script
+remains in CI and reports its missing optional prerequisites as a skip.
+
+The Release install completed under `/tmp/laso-postgres-only-install`, and the
+installed CLI reported `0.1.0-rc.1`. `ldd` on both `laso` and `laso-server`
+showed `libpqxx` and `libpq`, with no SQLite library. Clang 18 format validation,
+YAML parsing for the workflow and deployment examples, shell syntax checks, and
+`git diff --check` passed. Docker image build/startup/health validation could not
+run because Docker is not installed in this environment.
+
 
 ## Latest systemd deployment validation (2026-09-23)
 
@@ -839,3 +869,41 @@ No local build/test or physical fault injection was run in this closure pass. A 
 
 
 The d5, 9c40e65, and 8132de1 CI summaries and failed logs are retained in a restricted private archive. No test resources or production services were changed. PR #14 remains Draft. M5.2 is **not acceptance-ready** because physical owner-death, PostgreSQL outage/recovery, and continuation-after-restart remain unvalidated for an exact candidate, and the physical host safety preflight did not permit fault injection.
+
+## PR #16 independent review retest (2026-09-26)
+
+On PR head `1a9c2b7894a01ab356d4eed860c26d96cfec0222`, the isolated PostgreSQL 16.15 cluster at port 65439 ran the full Debug, Release, and ASan+UBSan suites. Each reported 264 tests: 261 passed, 0 failed, and 3 skipped (two S3-specific tests in the non-S3 build and optional `distributed_m3_acceptance`). PostgreSQL-backed owner, lease/fencing, migration, schema reopen, persistence, crash recovery, pool, CLI/API, and connection-error cases ran in these suites. The new unreadable legacy SQLite file rejection test passed. The branch remained based on `3cf8bed43d841086d58716bad223e08d6bf22a74`; upstream main had not moved. The process smoke test now drops both its normal and failed-start schemas from its EXIT cleanup; a query after the targeted test and full matrix found no `laso_smoke_*` schemas.
+
+The installed Release tree passed `cmake --install`; `ldd` on `laso-server` showed `libpqxx` and `libpq` and no SQLite library. The systemd user lifecycle acceptance passed against the disposable cluster after correcting stale test assumptions. This validates the invoking-user lifecycle, approvals through SIGTERM/SIGKILL restart, SIGINT, child cleanup, repeated transitions, and startup diagnostics; it does not validate a dedicated service account or system-unit sandbox. Docker/Podman and a Docker socket were unavailable, so image startup/health validation was not run. M3 remained skipped because active Codex sessions were present and its external worker adapters/prerequisites were unavailable; the acceptance was not launched to avoid interfering with those sessions.
+
+The independent review found an undefined legacy `$backend` reference in the systemd lifecycle script, missing DSN provisioning in its transient test units, config-failure probes running from the repository directory, missing schema cleanup in process smoke, and absent coverage for an unreadable legacy state file. These were corrected; each transient systemd probe now runs from its private acceptance directory and writes the disposable DSN only to a mode-0700 temporary directory. Process smoke now removes both schemas it creates on success and failure. One Release run during three-matrix concurrent load reported a segfault in `Api.SessionSseTwoClientsReplayExecutionAcrossRestart`; the focused case and complete Release rerun without the other matrices both passed. The transient failure's root cause was not established. No system-level unit/config test was run because it requires opt-in mutation under `/etc` and the installed dedicated account/config fixture was absent.
+
+### Concurrent Release segfault investigation (2026-09-26)
+
+The original failure was reproduced from the retained systemd-coredump (PID 3149434) and the Release CTest log. GDB identified the failing test as `Api.SessionSseTwoClientsReplayExecutionAcrossRestart`. At the crash, the main test thread was in `TemporaryDirectory::~TemporaryDirectory()` opening its cleanup PostgreSQL connection while an HTTP API worker was still executing `Service::agent_session()` / `Service::session_events()` for an SSE request. The test's cleanup called `HttpServer::stop()`, `Service::shutdown()`, then `io.stop()`. `HttpServer::stop()` posts cancellation work to the IO strand; immediately stopping the IO context prevented those cancellation handlers from draining while the server's separate API thread pool still held a request against the service and its state directory.
+
+The test now allows the IO context to drain naturally after server and service shutdown, and the adjacent cross-instance SSE test shuts down its service before joining the server IO thread. This corrects the test teardown lifecycle rather than adding timing delays. The focused Release SSE case then passed 40/40 executions across eight independent test processes; ASan+UBSan passed 12/12 across four processes. No new core or sanitizer report was produced. The post-fix full concurrent Debug, Release, and ASan+UBSan CTest matrices each passed 264 scheduled tests: 261 passed, 0 failed, 3 skipped. They ran concurrently against the disposable PostgreSQL 16.15 instance with one CTest worker per matrix. The three skips were the two S3-disabled configuration cases and optional `distributed_m3_acceptance`.
+
+The first higher-pressure rerun used CTest parallelism 4/4/3 and exposed a separate timing-bound test issue: `DistributedExecution.ShortLeaseRenewsDuringLongAsyncWork` measured one renewal gap of 2.509s against its 2.500s assertion bound. The same test passed five consecutive isolated Debug repetitions and passed in each final full matrix. The assertion and runtime were not changed. A separate first invocation that omitted `LASO_POSTGRES_DSN` failed 10 CLI/configuration tests with the explicit “PostgreSQL DSN is required” diagnostic; it was an invocation error, not counted as validation, and all final matrices were run with both DSN variables set.
+
+The leftover-schema audit after the first matrix set also found one schema per build tree from `Storage.PostgresRejectsSecondOwner`, which iterated storage fixtures without calling each fixture's cleanup callback. A scoped fixture cleanup now drops the schema on normal and exceptional exits, after the storage owner and temporary directory are destroyed. The targeted case passed in Debug, Release, and ASan+UBSan. After the final matrices, the disposable database had no `laso_test_*` schemas, no LASO test/server process, and only the audit's own `psql` connection. PostgreSQL had a 100-connection limit; observed peak during the higher-pressure run was 54, with no connection-limit or server resource errors in PostgreSQL logs. Available RAM remained above 8 GiB in sampled observations; swap was already nearly full before stress and remained stable. No new core was found.
+
+TSan was configured and built, but its runtime could not start the test binary on this host (`FATAL: ThreadSanitizer: unexpected memory mapping`), so it yielded no race diagnostic. This leaves residual concurrency risk, but the original test-harness use-after-free is established by the retained core and GDB trace, corrected at its shutdown ordering, and did not recur in 40 focused Release runs, 12 focused sanitizer runs, or the final three-way full matrix. The full post-fix matrix result is the accepted validation evidence; the earlier 2.509s bound miss remains recorded rather than hidden.
+
+### PR #16 readiness follow-up (2026-09-27)
+
+The final Clang-format check found one continuation-indent mismatch in `tests/unit/domain.cpp`; it was corrected and the complete source-format command then passed. The first S3-enabled hosted run also exposed two configuration tests that omitted the required PostgreSQL DSN. Both test configs now receive `test_dsn()`, so the negative S3 validation case reaches its intended S3 checks instead of passing on the missing-DSN error. The S3-enabled job passed on the resulting source: **270 scheduled, 268 passed, 2 skipped** (the untrusted-TLS case and optional M3 acceptance). Its Debug, Release, Debian, Clang, PostgreSQL, and formatting jobs passed.
+
+The ASan+UBSan job in that same hosted run timed out only on `Workers.WorkerInteractionsAreDurableIdempotentAndCancellable`. Its 100 ms polling loop did not observe the interaction, and the failed assertion then unwound through a `std::jthread` still waiting for resolution until CTest's 120 second test timeout. No sanitizer diagnostic was reported. This test was not changed. The exact test was run **20 consecutive times** under the local ASan+UBSan build against the disposable PostgreSQL 16.15 database; all 20 passed (9 seconds total). This appears to be a one-off scheduling/observation-window failure under hosted sanitizer load, but remains a check failure until a complete subsequent hosted sanitizer run passes. No PostgreSQL schemas or sessions remained after the local repetitions; the disposable cluster was stopped.
+
+### PR #16 hosted owner-lock failure follow-up (2026-09-27)
+
+Inspected the raw sanitizer job log for run `36289695663` / job `108537281728`. The failing step was the sequential command `ctest --test-dir build --output-on-failure`; CTest test 169 was `Api.SessionSseTwoClientsReplayExecutionAcrossRestart`. The first service completed cancellation, and construction of the replacement service failed after 683 ms with `PostgreSQL database is owned by another LASO process`. The workflow used PostgreSQL 16.15, database `laso_test`, schema derived from the test's unique temporary directory, and the same database/schema only for the intentional old-owner/replacement pair. No other test process ran concurrently in that job. The job did not record PostgreSQL backend PIDs or `pg_locks` at the failure, so the precise hosted lock holder could not be identified from its logs. The CI invocation and schema isolation show no accidental cross-test ownership-key collision.
+
+The ownership lock is a session-level `pg_try_advisory_lock(bigint)` acquired by a dedicated `PostgresStorage::Impl::owner` connection, separate from the connection pool. Previously, orderly destruction relied on closing that connection and allowed PostgreSQL to observe disconnect asynchronously; immediate replacement startup could reach its lock attempt before that disconnect released the session lock. Storage teardown now first destroys the pool and then explicitly executes `pg_advisory_unlock` on the exact dedicated owner connection/key that acquired the lock, before closing that connection. If the unlock query itself fails, the same owner session is still closed so PostgreSQL releases its session lock. This keeps ownership implementation inside the PostgreSQL storage boundary.
+
+Added `Storage.PostgresOwnerCanBeReacquiredImmediatelyAfterStorageDestruction`: for 25 cycles it confirms a competing storage is rejected while the original owner exists, then immediately constructs a replacement after the original storage is destroyed. Against the disposable PostgreSQL 16.15 instance, the ASan+UBSan CTest command repeated both this regression and the restart-SSE test with `--repeat until-fail:20`; the run completed without early failure. The final repeat of each test passed. It produced no sanitizer diagnostic. Post-run queries found zero advisory locks, zero other sessions connected to the test database, and zero `laso_test_*`, `laso_smoke_*`, or manually created test schemas. The only LASO-adjacent process left was this task's explicitly managed disposable PostgreSQL server.
+
+This is local reproduction evidence, not hosted resolution. The hosted ASan+UBSan check must pass on the corrected commit before PR #16 can leave Draft.
+
+The first pushed fix candidate (`c430221`) passed full builds but its hosted GCC and Clang Debug suites both exposed a `process_smoke` failure: run-event log lines appeared in the CLI's redirected JSON output, causing `jq` to reject it. The original hosted sanitizer failure was distinct. The new storage destructor's direct `spdlog` reference was removed to keep logging out of the storage layer; after rebuilding the local Debug CLI, `process_smoke` passed. This also avoids introducing a logger dependency above the PostgreSQL adapter's existing diagnostics boundary. A fresh hosted run is required to confirm both the smoke test and owner-lock fix on the revised candidate.

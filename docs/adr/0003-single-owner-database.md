@@ -1,5 +1,7 @@
 # ADR 0003: One LASO owner per database by default
 
+> Historical scope. PostgreSQL remains the default and only database for single-owner mode; SQLite ownership behavior no longer applies. See [ADR 0009](0009-postgres-only-storage.md).
+
 The PostgreSQL-only opt-in `execution_mode: multi_instance` described in
 `docs/distributed-execution.md` supersedes the former single-owner-only scope.
 SQLite and the default PostgreSQL mode still follow this ADR.
@@ -26,3 +28,5 @@ fenced `NodeWork` claims. It does not provide exactly-once external effects.
 
 Superseded for PostgreSQL multi-instance mode by the distributed execution
 milestone; retained as the default ownership decision.
+
+> **Status: partially superseded** by ADR 0009. PostgreSQL single-owner mode remains; SQLite ownership no longer applies.

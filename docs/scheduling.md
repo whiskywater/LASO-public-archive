@@ -109,6 +109,5 @@ storage and event history as the rest of LASO.
 `max_event_trigger_deliveries` have bounded defaults and may be set through YAML
 or `LASO_` environment variables. Each scheduler-created root run uses its own
 normal per-run limits while sharing global run/node/model/tool limits. PostgreSQL
-uses the existing single-service ownership lease plus transactional claims;
-SQLite uses its serialized local adapter. Neither backend provides a distributed
+uses transactions and durable claims. LASO does not provide a distributed
 worker scheduler or exactly-once delivery.

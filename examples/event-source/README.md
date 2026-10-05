@@ -20,6 +20,6 @@ laso --config examples/event-source/config.yaml \
 ```
 
 The source is intentionally disabled in configuration so startup does not emit
-anything until explicitly enabled. The example uses a local SQLite data directory
+anything until explicitly enabled. The example uses a local PostgreSQL schema
 and the plugin produced at `build/plugins`; use a trusted plugin directory in any
 deployment.

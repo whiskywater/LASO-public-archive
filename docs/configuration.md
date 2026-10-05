@@ -28,8 +28,9 @@ LASO rejects results returned after the deadline. The server advertises
 `sessions.context_reduction` only when reduction is enabled and the configured
 reducer is registered. See [session context semantics](sessions.md).
 
-`config/laso.example.yaml` is a safe SQLite starting point. It contains no
-credentials and binds the development API to loopback.
+`config/laso.example.yaml` is a safe PostgreSQL starting point. It contains no
+credentials and binds the development API to loopback. Set `LASO_POSTGRES_DSN`
+before starting LASO.
 
 ## Storage and execution
 

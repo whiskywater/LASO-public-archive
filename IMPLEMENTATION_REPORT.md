@@ -1,5 +1,7 @@
 # LASO v0.1 implementation report
 
+> Historical report for an earlier SQLite-first snapshot. SQLite dependencies and architecture described below no longer apply; see [storage migration guidance](docs/storage.md) and the current validation record in [VALIDATION.md](VALIDATION.md).
+
 The repository contains a native Linux C++20 baseline. **Implementation, static
 review, Ubuntu GCC/Clang builds, the complete test suite, and ASan/UBSan validation
 are complete for this snapshot.** See [the evidence record](VALIDATION.md).

@@ -5,7 +5,7 @@ project uses CMake 3.22 or newer, C++20, and a pinned JSON Schema validator
 fetched by CMake when it is not already available. A clean checkout is enough;
 no development worktree, generated file, or provider account is required.
 
-## Core SQLite build
+## PostgreSQL build
 
 On Ubuntu or Debian, install the core and test dependencies:
 
@@ -13,22 +13,23 @@ On Ubuntu or Debian, install the core and test dependencies:
 sudo apt-get update
 sudo apt-get install -y \
   build-essential cmake ninja-build git \
-  libsqlite3-dev libyaml-cpp-dev nlohmann-json3-dev \
+  libpq-dev libpqxx-dev libyaml-cpp-dev nlohmann-json3-dev \
   libspdlog-dev libcli11-dev libboost-system-dev libgtest-dev \
-  curl jq
+  postgresql-client curl jq
 ```
 
 Configure and build from the repository root:
 
 ```sh
+export LASO_TEST_POSTGRES_DSN="host=127.0.0.1 dbname=laso_test user=laso_test"
+export LASO_POSTGRES_DSN="$LASO_TEST_POSTGRES_DSN"
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug
 cmake --build build --parallel 2
 ctest --test-dir build --output-on-failure
 ```
 
-For a smaller runtime-only build, configure with `-DBUILD_TESTING=OFF`.
-The core build does not require PostgreSQL development packages or any agent
-provider executable.
+For a runtime-only build, configure with `-DBUILD_TESTING=OFF`. PostgreSQL
+client development packages are required in every build.
 
 The default binaries are:
 
@@ -60,20 +61,9 @@ cmake -S . -B build-tsan -G Ninja -DCMAKE_BUILD_TYPE=Debug \
 
 Do not combine TSan with ASan or UBSan.
 
-## PostgreSQL build
-
-PostgreSQL support is optional at compile time. Install the client libraries
-and `libpqxx`, then configure a separate build directory:
-
-```sh
-sudo apt-get install -y libpq-dev libpqxx-dev
-cmake -S . -B build-postgres -G Ninja -DCMAKE_BUILD_TYPE=Debug \
-  -DLASO_ENABLE_POSTGRES=ON
-cmake --build build-postgres --parallel 2
-```
-
-The PostgreSQL test suite uses `LASO_TEST_POSTGRES_DSN`. Use a disposable,
-authenticated database; never put the DSN in a repository file or command log.
+The test suite requires `LASO_TEST_POSTGRES_DSN` and `LASO_POSTGRES_DSN` pointing
+to a disposable PostgreSQL database. Each test uses and cleans a private schema;
+never point tests at production or put credentials in repository files.
 For a complete deterministic two-instance example, see
 [the distributed example](../examples/distributed/README.md).
 

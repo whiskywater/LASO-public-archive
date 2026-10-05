@@ -19,8 +19,7 @@ PostgreSQL database:
 
 ```sh
 export LASO_TEST_POSTGRES_DSN='host=127.0.0.1 port=5432 dbname=laso_test user=laso_test'
-cmake -S . -B build-postgres -G Ninja -DCMAKE_BUILD_TYPE=Debug \
-  -DLASO_ENABLE_POSTGRES=ON
+cmake -S . -B build-postgres -G Ninja -DCMAKE_BUILD_TYPE=Debug
 cmake --build build-postgres --parallel 2
 bash examples/distributed/run.sh build-postgres .
 ```

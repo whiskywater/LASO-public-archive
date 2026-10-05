@@ -47,17 +47,11 @@ std::unique_ptr<Coordination> make_coordination(const Config &config,
                                                 const std::string &instance_id) {
   if (config.execution_mode != "multi_instance")
     return nullptr;
-#ifdef LASO_HAS_POSTGRES
   return create_coordination(
-      {"postgres", config.postgres_dsn, config.postgres_schema,
-       config.postgres_pool_min_connections, config.postgres_pool_max_connections,
-       config.postgres_pool_acquisition_timeout_ms, config.instance_stale_after_ms},
+      {config.postgres_dsn, config.postgres_schema, config.postgres_pool_min_connections,
+       config.postgres_pool_max_connections, config.postgres_pool_acquisition_timeout_ms,
+       config.instance_stale_after_ms},
       instance_id);
-#else
-  (void)instance_id;
-  throw Error(ErrorCode::Configuration,
-              "multi_instance execution requires PostgreSQL support at build time");
-#endif
 }
 
 std::unique_ptr<ArtifactStore> make_artifact_store(const Config &config, Storage &storage) {
@@ -89,13 +83,10 @@ std::unique_ptr<ArtifactStore> make_artifact_store(const Config &config, Storage
 } // namespace
 Service::Service(asio::io_context &io, Config config)
     : config_(checked(std::move(config))), instance_id_(generate_service_instance_id()),
-      lease_(config_.storage_backend == "sqlite" ? std::make_unique<ProcessLease>(config_.db_path)
-                                                 : nullptr),
-      storage_(create_storage({config_.storage_backend, config_.db_path, config_.postgres_dsn,
-                               config_.postgres_schema, config_.postgres_pool_min_connections,
-                               config_.postgres_pool_max_connections,
-                               config_.postgres_pool_acquisition_timeout_ms,
-                               config_.execution_mode == "multi_instance"})),
+      storage_(create_storage(
+          {config_.postgres_dsn, config_.postgres_schema, config_.postgres_pool_min_connections,
+           config_.postgres_pool_max_connections, config_.postgres_pool_acquisition_timeout_ms,
+           config_.execution_mode == "multi_instance"})),
       coordination_(make_coordination(config_, instance_id_)),
       policy_(config_.rules, config_.allow_network), schemas_(config_.schema_roots),
       ingress_(*storage_, events_, schemas_, config_.max_event_trigger_depth,
@@ -322,7 +313,7 @@ Json Service::register_pipeline(const std::string &yaml) {
     storage_->commit(
         {{RecordKind::Pipeline, key, "", record}, {RecordKind::Event, e.id, "", Json(e)}});
   } catch (const Error &error) {
-    // Another registration may have won the SQLite transaction between the
+    // Another registration may have won the transaction between the
     // initial lookup and this commit. Preserve idempotence for the same
     // immutable source while still rejecting a conflicting revision.
     if (error.code != ErrorCode::Conflict)

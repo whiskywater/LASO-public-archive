@@ -127,11 +127,11 @@ case_failure() {
 
 cat >"$tmp/candidate" <<EOF
 data_dir: /var/lib/laso
+db_path: /tmp/old-laso.db
 api_host: 127.0.0.1
 api_port: $port
-storage_backend: postgres
 EOF
-case_failure "invalid storage configuration" "PostgreSQL DSN is required"
+case_failure "removed SQLite storage configuration" "SQLite storage configuration was removed"
 
 cat >"$tmp/candidate" <<EOF
 data_dir: /var/lib/laso
@@ -144,11 +144,10 @@ case_failure "unavailable plugin directory" "Configured plugin directory is unav
 
 cat >"$tmp/candidate" <<EOF
 data_dir: /etc/laso/acceptance-denied-state
-db_path: /etc/laso/acceptance-denied-state/laso.db
 api_host: 127.0.0.1
 api_port: $port
 EOF
-case_failure "unwritable state directory" "Read-only file system"
+case_failure "unwritable state directory" "Unable to create artifact object store"
 
 cat >"$tmp/candidate" <<'EOF'
 data_dir: [malformed

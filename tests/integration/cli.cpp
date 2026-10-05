@@ -2,6 +2,7 @@
 #include <fstream>
 #include <iostream>
 #include <laso/cli/cli.hpp>
+#include <optional>
 #include <sstream>
 
 using namespace laso;
@@ -14,6 +15,25 @@ struct CliResult {
 };
 
 CliResult invoke_cli(std::vector<std::string> arguments) {
+  std::optional<std::string> previous_schema;
+  if (const auto *value = std::getenv("LASO_POSTGRES_SCHEMA"))
+    previous_schema = value;
+  for (std::size_t i = 1; i + 1 < arguments.size(); ++i) {
+    if (arguments[i] == "--data-dir") {
+      setenv("LASO_POSTGRES_SCHEMA",
+             schema_for(std::filesystem::path(arguments[i + 1]) / "service").c_str(), 1);
+      break;
+    }
+  }
+  struct RestoreSchema {
+    std::optional<std::string> previous;
+    ~RestoreSchema() {
+      if (previous)
+        setenv("LASO_POSTGRES_SCHEMA", previous->c_str(), 1);
+      else
+        unsetenv("LASO_POSTGRES_SCHEMA");
+    }
+  } restore{previous_schema};
   std::vector<char *> argv;
   argv.reserve(arguments.size());
   for (auto &argument : arguments)

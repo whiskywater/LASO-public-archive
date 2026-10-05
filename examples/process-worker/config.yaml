@@ -1,5 +1,4 @@
 data_dir: .laso-process-worker
-storage_backend: sqlite
 process_workers:
   reference:
     # Replace this with the absolute path produced by the build.

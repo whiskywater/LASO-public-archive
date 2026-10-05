@@ -24,9 +24,9 @@ ScheduleDefinition schedule(const std::string &id, const std::string &type,
 } // namespace
 
 TEST(Scheduler, DurableTimeTypesAndPinnedOrigin) {
-  for_each_storage_backend([](const auto &backend) {
+  for_each_storage_fixture([](const auto &fixture) {
     TemporaryDirectory dir;
-    auto storage = backend.open(dir.path / "state.db");
+    auto storage = fixture.open(dir.path / "state.db");
     const auto initial = parse_utc_timestamp("2026-01-01T00:00:00.000Z");
     auto clock = std::make_shared<TestClock>(initial);
     std::vector<LaunchRequest> launches;
@@ -122,9 +122,9 @@ TEST(Scheduler, MisfireOverlapAndOccurrenceDeduplication) {
 }
 
 TEST(Scheduler, EventTriggersAreDurableMatchedAndDeduplicated) {
-  for_each_storage_backend([](const auto &backend) {
+  for_each_storage_fixture([](const auto &fixture) {
     TemporaryDirectory dir;
-    auto storage = backend.open(dir.path / "state.db");
+    auto storage = fixture.open(dir.path / "state.db");
     auto clock = std::make_shared<TestClock>(parse_utc_timestamp("2026-01-01T00:00:00.000Z"));
     std::vector<LaunchRequest> launches;
     asio::io_context io;

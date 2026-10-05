@@ -1,3 +1,6 @@
+# PostgreSQL is required, including in single-owner mode. Set LASO_POSTGRES_DSN
+# in the service environment; do not store credentials in this file.
+postgres_schema: public
 data_dir: .laso
 artifact_root: .laso/artifacts
 # Local filesystem storage is the default and requires no cloud account.
@@ -29,11 +32,8 @@ artifact_cleanup_grace_seconds: 3600
 # For isolated loopback MinIO tests only:
 # artifact_s3_endpoint: "http://127.0.0.1:9000"
 # artifact_s3_allow_http: true
-# SQLite is the default embedded backend. PostgreSQL is optional:
-# storage_backend: postgres
-# postgres_dsn: "host=127.0.0.1 port=5432 dbname=laso user=laso"
-# postgres_schema: public
-# PostgreSQL connection-pool limits (used only by the PostgreSQL backend).
+# PostgreSQL connection-pool limits.
+
 postgres_pool_min_connections: 1
 postgres_pool_max_connections: 4
 postgres_pool_acquisition_timeout_ms: 1000
@@ -44,7 +44,6 @@ coordination:
   mode: single_owner
   lease_ttl_ms: 30000
   heartbeat_interval_ms: 10000
-storage_backend: sqlite
 api_host: 127.0.0.1
 api_port: 8080
 # Per-process maximum for durable session SSE streams (valid range: 1..128).

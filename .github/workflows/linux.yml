@@ -8,6 +8,21 @@ permissions:
 jobs:
   ubuntu:
     runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: laso_test
+          POSTGRES_USER: laso_ci
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U laso_ci -d laso_test"
+          --health-interval 10s --health-timeout 5s --health-retries 10
+    env:
+      LASO_TEST_POSTGRES_DSN: host=127.0.0.1 port=5432 dbname=laso_test user=laso_ci
+      LASO_POSTGRES_DSN: host=127.0.0.1 port=5432 dbname=laso_test user=laso_ci
     strategy:
       fail-fast: false
       matrix:
@@ -17,11 +32,11 @@ jobs:
       - name: Install distribution dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential clang cmake ninja-build libsqlite3-dev libyaml-cpp-dev nlohmann-json3-dev libspdlog-dev libcli11-dev libboost-system-dev libgtest-dev curl jq clang-format-18 clang-tidy-18
+          sudo apt-get install -y build-essential clang cmake ninja-build libpq-dev libpqxx-dev libyaml-cpp-dev nlohmann-json3-dev libspdlog-dev libcli11-dev libboost-system-dev libgtest-dev postgresql-client curl jq clang-format-18 clang-tidy-18
       - name: Configure
         run: |
           if [ '${{ matrix.compiler }}' = clang ]; then export CC=clang CXX=clang++; else export CC=gcc CXX=g++; fi
-          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DLASO_ENABLE_SESSION_TEST_HOOKS=ON
       - run: cmake --build build --parallel 2
       - run: ctest --test-dir build --output-on-failure
       - name: Formatting
@@ -34,12 +49,27 @@ jobs:
             sort -u | xargs -r -n 1 clang-tidy-18 -p build
   sanitizers:
     runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: laso_test
+          POSTGRES_USER: laso_ci
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U laso_ci -d laso_test"
+          --health-interval 10s --health-timeout 5s --health-retries 10
+    env:
+      LASO_TEST_POSTGRES_DSN: host=127.0.0.1 port=5432 dbname=laso_test user=laso_ci
+      LASO_POSTGRES_DSN: host=127.0.0.1 port=5432 dbname=laso_test user=laso_ci
     steps:
       - uses: actions/checkout@v4
       - run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential cmake ninja-build libsqlite3-dev libyaml-cpp-dev nlohmann-json3-dev libspdlog-dev libcli11-dev libboost-system-dev libgtest-dev curl jq
-      - run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DLASO_ENABLE_ASAN=ON -DLASO_ENABLE_UBSAN=ON
+          sudo apt-get install -y build-essential cmake ninja-build libpq-dev libpqxx-dev libyaml-cpp-dev nlohmann-json3-dev libspdlog-dev libcli11-dev libboost-system-dev libgtest-dev postgresql-client curl jq
+      - run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DLASO_ENABLE_SESSION_TEST_HOOKS=ON -DLASO_ENABLE_ASAN=ON -DLASO_ENABLE_UBSAN=ON
       - run: cmake --build build --parallel 2
       - run: ctest --test-dir build --output-on-failure
         env:
@@ -51,16 +81,31 @@ jobs:
       fail-fast: false
       matrix:
         compiler: [gcc, clang]
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: laso_test
+          POSTGRES_USER: laso_ci
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U laso_ci -d laso_test"
+          --health-interval 10s --health-timeout 5s --health-retries 10
+    env:
+      LASO_TEST_POSTGRES_DSN: host=127.0.0.1 port=5432 dbname=laso_test user=laso_ci
+      LASO_POSTGRES_DSN: host=127.0.0.1 port=5432 dbname=laso_test user=laso_ci
     steps:
       - uses: actions/checkout@v4
       - name: Install release-build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential clang cmake ninja-build libsqlite3-dev libyaml-cpp-dev nlohmann-json3-dev libspdlog-dev libcli11-dev libboost-system-dev libgtest-dev curl jq
+          sudo apt-get install -y build-essential cmake ninja-build libpq-dev libpqxx-dev libyaml-cpp-dev nlohmann-json3-dev libspdlog-dev libcli11-dev libboost-system-dev libgtest-dev postgresql-client curl jq
       - name: Configure Release build
         run: |
           if [ "${{ matrix.compiler }}" = clang ]; then export CC=clang CXX=clang++; fi
-          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DLASO_ENABLE_SESSION_TEST_HOOKS=ON
       - run: cmake --build build --parallel 2
       - run: ctest --test-dir build --output-on-failure
       - name: Verify installed command-line tools
@@ -71,13 +116,26 @@ jobs:
   debian:
     runs-on: ubuntu-24.04
     container: debian:13
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: laso_test
+          POSTGRES_USER: laso_ci
+          POSTGRES_HOST_AUTH_METHOD: trust
+        options: >-
+          --health-cmd "pg_isready -U laso_ci -d laso_test"
+          --health-interval 10s --health-timeout 5s --health-retries 10
+    env:
+      LASO_TEST_POSTGRES_DSN: host=postgres port=5432 dbname=laso_test user=laso_ci
+      LASO_POSTGRES_DSN: host=postgres port=5432 dbname=laso_test user=laso_ci
     steps:
       - name: Install build tools
         run: |
           apt-get update
-          apt-get install -y git ca-certificates build-essential cmake ninja-build libsqlite3-dev libyaml-cpp-dev nlohmann-json3-dev libspdlog-dev libcli11-dev libboost-system-dev libgtest-dev curl jq
+          apt-get install -y git ca-certificates build-essential cmake ninja-build libpq-dev libpqxx-dev libyaml-cpp-dev nlohmann-json3-dev libspdlog-dev libcli11-dev libboost-system-dev libgtest-dev postgresql-client curl jq
       - uses: actions/checkout@v4
-      - run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug
+      - run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DLASO_ENABLE_SESSION_TEST_HOOKS=ON
       - run: cmake --build build --parallel 2
       - run: ctest --test-dir build --output-on-failure
   postgres:
@@ -101,18 +159,19 @@ jobs:
       - name: Install PostgreSQL build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential cmake ninja-build libsqlite3-dev libyaml-cpp-dev nlohmann-json3-dev libspdlog-dev libcli11-dev libboost-system-dev libgtest-dev libpq-dev libpqxx-dev clang-tidy-18 curl jq
+          sudo apt-get install -y build-essential cmake ninja-build libpq-dev libpqxx-dev libyaml-cpp-dev nlohmann-json3-dev libspdlog-dev libcli11-dev libboost-system-dev libgtest-dev postgresql-client clang-tidy-18 curl jq
       - name: Configure PostgreSQL build
-        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DLASO_ENABLE_POSTGRES=ON -DLASO_ENABLE_SESSION_TEST_HOOKS=ON
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DLASO_ENABLE_SESSION_TEST_HOOKS=ON
       - run: cmake --build build --parallel 2
       - name: clang-tidy PostgreSQL build
         run: |
           jq -r '.[].file | select(endswith(".cpp"))' build/compile_commands.json |
             sort -u | xargs -r -n 1 clang-tidy-18 -p build
-      - name: Run SQLite and PostgreSQL tests with parallel scheduling
+      - name: Run PostgreSQL storage/runtime tests
         run: ctest --test-dir build --output-on-failure --parallel 2
         env:
           LASO_TEST_POSTGRES_DSN: host=127.0.0.1 port=5432 dbname=laso_test user=laso_ci
+          LASO_POSTGRES_DSN: host=127.0.0.1 port=5432 dbname=laso_test user=laso_ci
       - name: Repeat two-instance session contention tests
         run: |
           ctest --test-dir build --show-only=json-v1 |
@@ -121,14 +180,30 @@ jobs:
             -R '^(Sessions\.PostgresTwoInstancesFenceDispatchAndPreserveSessionOrdering|Sessions\.PostgresTwoInstancesDeduplicateConcurrentSubmissions)$'
         env:
           LASO_TEST_POSTGRES_DSN: host=127.0.0.1 port=5432 dbname=laso_test user=laso_ci
+          LASO_POSTGRES_DSN: host=127.0.0.1 port=5432 dbname=laso_test user=laso_ci
   s3:
     runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: laso_test
+          POSTGRES_USER: laso_ci
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U laso_ci -d laso_test"
+          --health-interval 10s --health-timeout 5s --health-retries 10
+    env:
+      LASO_TEST_POSTGRES_DSN: host=127.0.0.1 port=5432 dbname=laso_test user=laso_ci
+      LASO_POSTGRES_DSN: host=127.0.0.1 port=5432 dbname=laso_test user=laso_ci
     steps:
       - uses: actions/checkout@v4
       - name: Install LASO and AWS SDK build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential cmake ninja-build git golang-go libsqlite3-dev libyaml-cpp-dev nlohmann-json3-dev libspdlog-dev libcli11-dev libboost-system-dev libgtest-dev curl jq libcurl4-openssl-dev libssl-dev zlib1g-dev
+          sudo apt-get install -y build-essential cmake ninja-build git golang-go libpq-dev libpqxx-dev libyaml-cpp-dev nlohmann-json3-dev libspdlog-dev libcli11-dev libboost-system-dev libgtest-dev postgresql-client curl jq libcurl4-openssl-dev libssl-dev zlib1g-dev
       - name: Start disposable loopback-only MinIO
         run: |
           if ss -ltn | grep -q ':19387 '; then echo 'test port is already in use' >&2; exit 1; fi
@@ -179,7 +254,7 @@ jobs:
       - name: Build and run S3-enabled LASO regression suite
         run: |
           CMAKE_PREFIX_PATH="$RUNNER_TEMP/aws-sdk" cmake -S . -B build-s3 -G Ninja \
-            -DCMAKE_BUILD_TYPE=Debug -DLASO_ENABLE_S3=ON
+            -DCMAKE_BUILD_TYPE=Debug -DLASO_ENABLE_S3=ON -DLASO_ENABLE_SESSION_TEST_HOOKS=ON
           cmake --build build-s3 --parallel 2
           ctest --test-dir build-s3 --output-on-failure
         env:

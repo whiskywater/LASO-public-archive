@@ -105,7 +105,6 @@ edges:
 
 Config test_config() {
   Config config;
-  config.storage_backend = "postgres";
   config.postgres_dsn =
       required("LASO_DISTRIBUTED_TEST_DSN") ? required("LASO_DISTRIBUTED_TEST_DSN") : "";
   config.postgres_schema =
@@ -137,7 +136,6 @@ Config test_config() {
 
 std::unique_ptr<Storage> test_storage(const Config &config) {
   StorageOptions options;
-  options.backend = config.storage_backend;
   options.postgres_dsn = config.postgres_dsn;
   options.postgres_schema = config.postgres_schema;
   options.postgres_pool_acquisition_timeout_ms = config.postgres_pool_acquisition_timeout_ms;

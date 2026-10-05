@@ -716,7 +716,7 @@ TEST(Runtime, SubpipelineMissingReferenceAndDirectRecursionAreRejected) {
 TEST(Runtime, IndirectSubpipelineRecursionIsRejected) {
   TemporaryDirectory dir;
   auto c = config(dir.path);
-  auto raw = make_storage(c.db_path);
+  auto raw = make_storage(c.data_dir / "service");
   raw->commit(
       {{RecordKind::Pipeline,
         "stored-b@1",

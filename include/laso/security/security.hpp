@@ -35,15 +35,4 @@ class EnvironmentSecretProvider final : public SecretProvider {
 public:
   std::string resolve(const std::string &reference) const override;
 };
-// Single process ownership avoids competing executors and approvals across processes.
-class ProcessLease {
-public:
-  explicit ProcessLease(const std::filesystem::path &database);
-  ~ProcessLease();
-  ProcessLease(const ProcessLease &) = delete;
-  ProcessLease &operator=(const ProcessLease &) = delete;
-
-private:
-  int fd_ = -1;
-};
 } // namespace laso

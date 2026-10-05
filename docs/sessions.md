@@ -82,8 +82,7 @@ The session-to-turn-to-run relationship is explicit: each executed turn stores
 its run ID, and each run stores both the session ID and turn ID. Session event
 records include turn/run identifiers for execution lifecycle events. These
 relations survive process restart. PostgreSQL assigns ordering under a session
-row lock, and its journal can be read by another service instance. SQLite keeps
-the documented single-instance semantics.
+row lock, and its journal can be read by another service instance.
 
 ## Execution and event delivery
 

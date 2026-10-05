@@ -111,11 +111,9 @@ private:
 };
 } // namespace
 
-#if defined(LASO_HAS_POSTGRES)
 TEST(PostgresPool, BoundedAcquisitionAndReplacement) {
   IsolatedPostgres database;
-  if (database.dsn.empty())
-    GTEST_SKIP() << "LASO_TEST_POSTGRES_DSN is not configured";
+
   PostgresConnectionPool pool(database.dsn, database.schema, {1, 1, 50});
   auto held = pool.acquire();
   EXPECT_EQ(pool.diagnostics().in_use, 1U);
@@ -158,8 +156,7 @@ TEST(Coordination, InstanceIdentityIsOpaqueAndUnique) {
 
 TEST(Coordination, InstanceRegistryHeartbeatsAndStaleInspection) {
   IsolatedPostgres database;
-  if (database.dsn.empty())
-    GTEST_SKIP() << "LASO_TEST_POSTGRES_DSN is not configured";
+
   auto instance = create_coordination(database.options(), "instance-registry");
   instance->register_instance("test", "run-claims");
   auto records = instance->list_instances(90000);
@@ -178,8 +175,7 @@ TEST(Coordination, InstanceRegistryHeartbeatsAndStaleInspection) {
 
 TEST(Coordination, SingleWinnerRenewReleaseAndInspection) {
   IsolatedPostgres database;
-  if (database.dsn.empty())
-    GTEST_SKIP() << "LASO_TEST_POSTGRES_DSN is not configured";
+
   auto first = create_coordination(database.options(), "instance-a");
   auto second = create_coordination(database.options(), "instance-b");
   auto owner = first->acquire("resource", 5000);
@@ -204,8 +200,7 @@ TEST(Coordination, SingleWinnerRenewReleaseAndInspection) {
 
 TEST(Coordination, ExpiryTakeoverRejectsStaleFencingToken) {
   IsolatedPostgres database;
-  if (database.dsn.empty())
-    GTEST_SKIP() << "LASO_TEST_POSTGRES_DSN is not configured";
+
   auto first = create_coordination(database.options(), "instance-a");
   auto second = create_coordination(database.options(), "instance-b");
   auto old_owner = first->acquire("resource", 100);
@@ -222,8 +217,7 @@ TEST(Coordination, ExpiryTakeoverRejectsStaleFencingToken) {
 
 TEST(Coordination, ContendedTakeoverHasOneWinner) {
   IsolatedPostgres database;
-  if (database.dsn.empty())
-    GTEST_SKIP() << "LASO_TEST_POSTGRES_DSN is not configured";
+
   auto seed = create_coordination(database.options(), "seed");
   ASSERT_TRUE(seed->acquire("resource", 100));
   std::this_thread::sleep_for(std::chrono::milliseconds(180));
@@ -244,8 +238,7 @@ TEST(Coordination, ContendedTakeoverHasOneWinner) {
 
 TEST(Coordination, ProcessExitAllowsCrashTakeover) {
   IsolatedPostgres database;
-  if (database.dsn.empty())
-    GTEST_SKIP() << "LASO_TEST_POSTGRES_DSN is not configured";
+
   const auto child = fork();
   ASSERT_NE(child, -1);
   if (child == 0) {
@@ -268,8 +261,3 @@ TEST(Coordination, ProcessExitAllowsCrashTakeover) {
   ASSERT_TRUE(takeover);
   EXPECT_EQ(takeover->fencing_token, 2U);
 }
-#else
-TEST(Coordination, PostgreSQLBackendNotBuilt) {
-  GTEST_SKIP() << "LASO_ENABLE_POSTGRES is not enabled";
-}
-#endif

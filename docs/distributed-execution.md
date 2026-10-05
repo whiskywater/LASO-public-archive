@@ -4,13 +4,12 @@ LASO can optionally run more than one service process against the same
 PostgreSQL schema. Enable it explicitly with:
 
 ```yaml
-storage_backend: postgres
 postgres_dsn: "..."
 execution_mode: multi_instance
 ```
 
-The default remains `execution_mode: single`. SQLite rejects multi-instance
-configuration. PostgreSQL schema migrations use a short transaction advisory
+The default remains `execution_mode: single`, with PostgreSQL as the required
+storage backend. PostgreSQL schema migrations use a short transaction advisory
 lock, while the normal single-owner PostgreSQL mode retains its session-held
 advisory lock.
 
@@ -113,13 +112,13 @@ inspection is available at `GET /api/v1/instances` and `laso instance list`.
   leader-election, or distributed worker system. It is a PostgreSQL coordination
   plane for opt-in LASO instances.
 - `NodeWork` is a durable storage record covered by both storage adapters;
-  PostgreSQL migration 8 adds its table. SQLite remains single-instance and
+  PostgreSQL migration 8 adds its table. PostgreSQL single-owner mode runs one service per schema and
   executes the existing local branch path.
 - Scheduler occurrence and event-delivery claims remain durable deduplication
   records; no arbitrary external source receives an exactly-once guarantee.
 - Native plugins and external workers remain privileged integrations and must
   still obey the existing policy, timeout, cancellation, and cleanup contracts.
-- SQLite remains single-instance and rejects `execution_mode: multi_instance`;
+- PostgreSQL single-owner mode runs one service per schema;
   it is not a distributed conformance substitute.
 - Worker execution is at-least-once in the presence of lease expiry. A single
   fenced completion may become authoritative, but LASO does not claim exactly
