@@ -1,0 +1,34 @@
+data_dir: @DATA_DIR@
+storage_backend: postgres
+postgres_dsn: "@POSTGRES_DSN@"
+postgres_schema: "@POSTGRES_SCHEMA@"
+execution_mode: multi_instance
+workers: 2
+max_runs: 4
+max_nodes: 4
+max_nodes_per_run: 2
+max_worker_jobs: 4
+max_worker_jobs_per_worker: 1
+coordination:
+  mode: experimental_multi_instance
+  lease_ttl_ms: 3000
+  heartbeat_interval_ms: 200
+api_host: 127.0.0.1
+api_port: 0
+artifact_service_host: 127.0.0.1
+artifact_service_port: 0
+artifact_service_url: "@ARTIFACT_SERVICE_URL@"
+artifact_service_token: "@ARTIFACT_SERVICE_TOKEN@"
+log_level: info
+json_logs: true
+allow_network: false
+allow_remote_api: false
+process_workers:
+  codex:
+    executable: @CODEX_WORKER@
+    args: [--codex, @CODEX_BIN@, --allowed-root, @WORKSPACE_ROOT@, --timeout-ms, "180000"]
+    environment_allowlist: [HOME, CODEX_HOME, PATH]
+    startup_timeout_ms: 180000
+    request_timeout_ms: 180000
+    interaction_timeout_ms: 300000
+policies: []

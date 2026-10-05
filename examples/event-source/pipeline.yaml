@@ -1,0 +1,10 @@
+laso: "1"
+name: event-source-example
+version: 1
+nodes:
+  copy:
+    type: function
+    function: identity
+edges:
+  - {from: input, to: copy}
+  - {from: copy, to: output}

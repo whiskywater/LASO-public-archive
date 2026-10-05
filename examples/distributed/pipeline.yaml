@@ -1,0 +1,39 @@
+laso: '1'
+name: distributed-reference
+version: 1
+nodes:
+  input:
+    type: input
+  fork:
+    type: parallel
+    join: join
+  work:
+    type: worker
+    worker: reference
+    capability: deterministic
+    task_type: deterministic
+    instructions: "Return the deterministic reference result without using external services."
+  verify:
+    type: validator
+    field: ok
+    value: true
+  deterministic:
+    type: function
+    function: identity
+  rejected:
+    type: function
+    function: identity
+  join:
+    type: join
+  output:
+    type: output
+edges:
+  - {from: input, to: fork}
+  - {from: fork, to: work}
+  - {from: fork, to: deterministic}
+  - {from: work, to: verify}
+  - {from: verify, condition: accepted, to: join}
+  - {from: verify, condition: rejected, to: rejected}
+  - {from: rejected, to: join}
+  - {from: deterministic, to: join}
+  - {from: join, to: output}

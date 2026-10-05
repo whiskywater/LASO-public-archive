@@ -1,0 +1,26 @@
+laso: '1'
+name: distributed-cross-machine-codex-cancel
+version: 1
+max_steps: 32
+timeout_ms: 240000
+nodes:
+  input: {type: input}
+  fork: {type: parallel, join: join}
+  codex:
+    type: worker
+    worker: codex
+    task_type: coding
+    capability: coding-agent
+    timeout_ms: 180000
+    max_attempts: 1
+    instructions: "In the staged synthetic workspace, run a deliberately long command that sleeps for 90 seconds before making any edit. If the command is interrupted, report that cancellation was observed. Do not access files outside the workspace."
+  stable: {type: function, function: identity}
+  join: {type: join}
+  output: {type: output}
+edges:
+  - {from: input, to: fork}
+  - {from: fork, to: codex}
+  - {from: fork, to: stable}
+  - {from: codex, to: join}
+  - {from: stable, to: join}
+  - {from: join, to: output}

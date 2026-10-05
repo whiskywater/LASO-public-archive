@@ -1,0 +1,11 @@
+{
+  "id": "scheduled-work-interval",
+  "name": "scheduled work interval",
+  "pipeline": "scheduled-work@1",
+  "type": "interval",
+  "start_at": "2030-01-01T00:00:00.000Z",
+  "interval_ms": "300000",
+  "input": {"mode": "interval"},
+  "misfire_policy": "SKIP",
+  "overlap_policy": "QUEUE_ONE"
+}

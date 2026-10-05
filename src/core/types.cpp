@@ -55,14 +55,15 @@ bool valid_transition(RunState from, RunState to) {
            to == RunState::TimedOut;
   case RunState::Running:
     return to == RunState::Completed || to == RunState::WaitingModel ||
-           to == RunState::WaitingTool || to == RunState::WaitingApproval ||
-           to == RunState::Retrying || to == RunState::Paused || to == RunState::Failed ||
-           to == RunState::Cancelled || to == RunState::TimedOut;
+           to == RunState::WaitingTool || to == RunState::WaitingWorker ||
+           to == RunState::WaitingApproval || to == RunState::Retrying || to == RunState::Paused ||
+           to == RunState::Failed || to == RunState::Cancelled || to == RunState::TimedOut;
   case RunState::WaitingApproval:
   case RunState::Paused:
     return to == RunState::Queued || to == RunState::Failed || to == RunState::Cancelled;
   case RunState::WaitingTool:
   case RunState::WaitingModel:
+  case RunState::WaitingWorker:
   case RunState::Retrying:
     return to == RunState::Running || to == RunState::Failed || to == RunState::Cancelled ||
            to == RunState::TimedOut;

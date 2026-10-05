@@ -1,0 +1,39 @@
+[Unit]
+Description=LASO Orchestration Framework
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=@LASO_SYSTEMD_SERVICE_USER@
+Group=@LASO_SYSTEMD_SERVICE_GROUP@
+ExecStart="@CMAKE_INSTALL_FULL_BINDIR@/laso-server" --config "@LASO_SYSTEMD_CONFIG_FILE@"
+WorkingDirectory=/var/lib/@LASO_SYSTEMD_STATE_NAME@
+Environment=LASO_DATA_DIR=/var/lib/@LASO_SYSTEMD_STATE_NAME@
+Environment=LASO_JSON_LOGS=true
+StandardOutput=journal
+StandardError=journal
+StateDirectory=@LASO_SYSTEMD_STATE_NAME@
+StateDirectoryMode=0700
+UMask=0077
+Restart=on-failure
+RestartSec=5s
+KillMode=control-group
+TimeoutStopSec=30s
+SendSIGKILL=yes
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictRealtime=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

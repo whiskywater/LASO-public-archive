@@ -1,0 +1,10 @@
+{
+  "id": "scheduled-work-cron",
+  "name": "scheduled work cron",
+  "pipeline": "scheduled-work@1",
+  "type": "cron",
+  "cron": "*/5 * * * *",
+  "input": {"mode": "cron"},
+  "misfire_policy": "SKIP",
+  "overlap_policy": "ALLOW"
+}

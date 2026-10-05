@@ -1,6 +1,6 @@
 # Pipeline registry and composition
 
-LASO registers pipeline revisions in the existing SQLite-backed registry. The
+LASO registers pipeline revisions in the configured backend-neutral registry. The
 logical identity is `name@version`, not a YAML file path. A definition with
 `name: research` and `version: 2` is registered as `research@2`.
 
@@ -40,9 +40,16 @@ branches.
 Registration rejects missing or ambiguous references and detects direct and
 indirect recursive dependencies. Runtime also enforces `max_subpipeline_depth`,
 which defaults to 16 and accepts values from 1 through 64. The registry is local
-and durable; this feature does not provide distributed execution or a package
-registry.
+and durable. Optional multi-instance ownership and deterministic branch work are
+documented in [distributed execution](distributed-execution.md); this feature
+does not provide a package registry or distributed worker leasing.
 
 The offline examples in `examples/composition` show a versioned two-pipeline
 composition and a three-pipeline chain. Register referenced children first, then
 the parent, using `laso pipeline register`; start with `laso run start process@1`.
+
+Schedules and event triggers are separate durable records, not pipeline macros.
+Create them after registering their pinned pipeline revision with the API or with
+`laso schedule create FILE` / `laso trigger create FILE`. Their definitions and
+the scheduler's UTC/misfire/overlap semantics are documented in
+[scheduling](scheduling.md).

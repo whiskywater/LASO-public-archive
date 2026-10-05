@@ -52,19 +52,19 @@ unsigned number(const YAML::Node &n, const char *key, unsigned fallback, unsigne
     throw Error(ErrorCode::Validation, "Numeric configuration out of bounds");
   return static_cast<unsigned>(value);
 }
-Json value(const YAML::Node &n) {
+Json yaml_value_impl(const YAML::Node &n) {
   if (!n || n.IsNull())
     return nullptr;
   if (n.IsSequence()) {
     Json j = Json::array();
     for (const auto &v : n)
-      j.push_back(value(v));
+      j.push_back(yaml_value_impl(v));
     return j;
   }
   if (n.IsMap()) {
     Json j = Json::object();
     for (const auto &v : n)
-      j[v.first.as<std::string>()] = value(v.second);
+      j[v.first.as<std::string>()] = yaml_value_impl(v.second);
     return j;
   }
   const auto s = n.as<std::string>();
@@ -78,6 +78,9 @@ bool identifier(const std::string &s) {
   return std::regex_match(s, pattern);
 }
 } // namespace
+Json detail::yaml_value(const YAML::Node &n) {
+  return yaml_value_impl(n);
+}
 YAML::Node detail::load_safe_yaml(const std::string &text) {
   if (text.size() > max_document_bytes)
     throw Error(ErrorCode::Validation, "Configuration exceeds 1 MiB");
@@ -148,14 +151,16 @@ PipelineDefinition parse_pipeline(const std::string &text,
       throw Error(ErrorCode::Validation, "Nodes must be a map and edges a sequence");
     for (const auto &item : root["nodes"]) {
       const auto n = item.second;
-      keys(n, {"type", "function", "tool", "model", "pipeline", "prompt", "field", "value",
-               "condition", "reason", "join", "max_attempts", "retry_delay_ms", "timeout_ms",
-               "max_iterations", "input_schema", "output_schema", "schema"});
+      keys(n, {"type",         "function",      "tool",           "model",      "pipeline",
+               "prompt",       "field",         "value",          "condition",  "reason",
+               "join",         "max_attempts",  "retry_delay_ms", "timeout_ms", "max_iterations",
+               "input_schema", "output_schema", "schema",         "worker",     "task_type",
+               "capability",   "instructions"});
       NodeDefinition d;
       d.id = item.first.as<std::string>();
       d.type = str(n, "type");
       unsigned bindings = 0;
-      for (auto key : {"function", "tool", "model", "pipeline"})
+      for (auto key : {"function", "tool", "model", "pipeline", "worker"})
         if (n[key]) {
           d.binding = str(n, key);
           ++bindings;
@@ -164,6 +169,7 @@ PipelineDefinition parse_pipeline(const std::string &text,
         throw Error(ErrorCode::Validation, "Only one node binding is permitted");
       const auto expected = d.type == "agent"         ? "model"
                             : d.type == "subpipeline" ? "pipeline"
+                            : d.type == "worker"      ? "worker"
                                                       : d.type.c_str();
       if (bindings && !n[expected])
         throw Error(ErrorCode::Validation, "Binding field does not match node type");
@@ -175,7 +181,10 @@ PipelineDefinition parse_pipeline(const std::string &text,
       d.input_schema = str(n, "input_schema");
       d.output_schema = str(n, "output_schema");
       d.schema = str(n, "schema");
-      d.value = value(n["value"]);
+      d.task_type = str(n, "task_type");
+      d.capability = str(n, "capability");
+      d.instructions = str(n, "instructions", d.prompt);
+      d.value = detail::yaml_value(n["value"]);
       d.retry.max_attempts = number(n, "max_attempts", 1, 1, 10);
       d.retry.delay = Milliseconds(number(n, "retry_delay_ms", 0, 0, 60000));
       d.timeout.timeout = Milliseconds(number(n, "timeout_ms", 30000, 1, 3600000));
@@ -202,9 +211,9 @@ PipelineDefinition parse_pipeline(const std::string &text,
   }
 }
 void validate_pipeline(const PipelineDefinition &p, const std::set<std::string> &extensions) {
-  static const std::set<std::string> types = {"input",    "output", "function",  "agent",
-                                              "tool",     "router", "validator", "approval",
-                                              "parallel", "join",   "loop",      "subpipeline"};
+  static const std::set<std::string> types = {
+      "input",    "output",   "function", "agent", "tool",        "router", "validator",
+      "approval", "parallel", "join",     "loop",  "subpipeline", "worker"};
   if (p.schema_version != 1 || p.version == 0 || p.max_steps == 0 || p.max_steps > 100000 ||
       !p.nodes.contains("input") || !p.nodes.contains("output") || !identifier(p.name) ||
       p.nodes.size() > 256 || p.edges.size() > 1024)
@@ -218,6 +227,12 @@ void validate_pipeline(const PipelineDefinition &p, const std::set<std::string> 
       throw Error(ErrorCode::Validation, "Invalid node ID or unknown type");
     if ((n.type == "tool" || n.type == "function" || n.type == "agent") && !identifier(n.binding))
       throw Error(ErrorCode::Validation, "A logical binding is required");
+    if (n.type == "worker" && n.binding.empty() && n.capability.empty())
+      throw Error(ErrorCode::Validation, "Worker requires a binding or capability");
+    if (n.type == "worker" && (!n.binding.empty() && !identifier(n.binding)))
+      throw Error(ErrorCode::Validation, "Invalid worker binding");
+    if (n.type == "worker" && n.capability.size() > 128)
+      throw Error(ErrorCode::Validation, "Invalid worker capability");
     if (n.type == "subpipeline")
       (void)parse_pipeline_reference(n.binding);
     if (n.type == "loop" && n.max_iterations == 0)

@@ -1,0 +1,10 @@
+{
+  "id": "scheduled-work-once",
+  "name": "scheduled work once",
+  "pipeline": "scheduled-work@1",
+  "type": "one_time",
+  "at": "2030-01-01T00:00:00.000Z",
+  "input": {"mode": "one-time"},
+  "misfire_policy": "RUN_ONCE",
+  "overlap_policy": "ALLOW"
+}

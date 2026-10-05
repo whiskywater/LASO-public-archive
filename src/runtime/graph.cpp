@@ -20,6 +20,14 @@ PolicyResult Runtime::permission(const NodeDefinition &n, const Run &r) const {
     auto m = deps_.providers.get(binding->second.provider)->metadata();
     c.remote = m.remote;
     c.network = m.network || m.remote;
+  } else if (n.type == "worker") {
+    if (!deps_.workers)
+      throw Error(ErrorCode::Execution, "Worker manager is unavailable");
+    const auto worker_id = deps_.workers->resolve_worker(n.binding, n.capability);
+    const auto worker = deps_.workers->worker(worker_id);
+    c.resource = worker_id;
+    c.remote = worker.value("remote", false);
+    c.network = c.remote;
   }
   return deps_.policy.evaluate(c);
 }
@@ -46,6 +54,13 @@ std::unique_ptr<Node> Runtime::make_node(const NodeDefinition &n) {
     return std::make_unique<FunctionNode>(deps_.functions.get(n.binding));
   if (n.type == "tool")
     return std::make_unique<ToolNode>(deps_.tools.get(n.binding), tools_);
+  if (n.type == "worker") {
+    if (!deps_.workers)
+      throw Error(ErrorCode::Execution, "Worker manager is unavailable");
+    auto worker_id = deps_.workers->resolve_worker(n.binding, n.capability);
+    return std::make_unique<WorkerNode>(deps_.workers, worker_id, n.task_type, n.instructions,
+                                        n.capability, n.output_schema);
+  }
   if (n.type == "agent") {
     auto binding = config_.models.find(n.binding);
     if (binding == config_.models.end())

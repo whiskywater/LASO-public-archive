@@ -1,0 +1,7 @@
+{
+  "id": "scheduled-work-artifact",
+  "name": "scheduled work on artifact",
+  "pipeline": "scheduled-work@1",
+  "event": "artifact.created",
+  "match": {"source": "offline-example"}
+}

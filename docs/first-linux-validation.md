@@ -1,6 +1,7 @@
 # First real Linux validation checklist
 
-Status at delivery: **PENDING**. This file is a procedure, not evidence of success.
+Historical status at delivery: **PENDING**. This file is a procedure, not evidence
+of success; see the current deployment results in `../VALIDATION.md`.
 Do not promote a row to PASS until the corresponding command has actually run.
 
 1. On Ubuntu 24.04 or Debian 13, install README dependencies and record `uname -a`,

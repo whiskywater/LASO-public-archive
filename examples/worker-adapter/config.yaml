@@ -1,0 +1,14 @@
+data_dir: .laso-worker-example
+storage_backend: sqlite
+schema_roots: [examples/worker-adapter]
+plugin_dirs: [build/worker-plugins]
+worker_plugins:
+  offline:
+    plugin: example-worker
+    component: example-worker
+    enabled: true
+    config: {mode: deterministic}
+max_worker_jobs: 4
+max_worker_jobs_per_worker: 2
+allow_network: false
+allow_remote_api: false

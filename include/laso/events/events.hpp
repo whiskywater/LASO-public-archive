@@ -16,6 +16,12 @@ public:
   virtual void publish(const Event &) noexcept = 0;
   virtual void subscribe(std::shared_ptr<EventSubscriber>) = 0;
 };
+enum class IngressStatus { Accepted, Duplicate, Rejected, Backpressured, Stopped };
+struct IngressResult {
+  IngressStatus status = IngressStatus::Rejected;
+  std::string event_id;
+  std::string message;
+};
 class InProcessEventBus final : public EventBus {
 public:
   void subscribe(std::shared_ptr<EventSubscriber> s) override {

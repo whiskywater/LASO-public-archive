@@ -716,8 +716,8 @@ TEST(Runtime, SubpipelineMissingReferenceAndDirectRecursionAreRejected) {
 TEST(Runtime, IndirectSubpipelineRecursionIsRejected) {
   TemporaryDirectory dir;
   auto c = config(dir.path);
-  SQLiteStorage raw(c.db_path);
-  raw.commit(
+  auto raw = make_storage(c.db_path);
+  raw->commit(
       {{RecordKind::Pipeline,
         "stored-b@1",
         "",

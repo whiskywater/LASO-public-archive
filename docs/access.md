@@ -17,6 +17,13 @@ an arbitrary request-body actor. Local development identity is unauthenticated.
 | GET | `/approvals`, `/approvals/{id}` |
 | POST | `/approvals/{id}/approve`, `/approvals/{id}/reject` |
 | GET | `/providers`, `/tools`, `/plugins` |
+| GET | `/event-sources`, `/event-sources/{id}` |
+| POST | `/event-sources/{id}/enable`, `/event-sources/{id}/disable` |
+| GET | `/workers`, `/workers/{id}` |
+| GET | `/worker-jobs`, `/worker-jobs/{id}` |
+| POST | `/worker-jobs/{id}/cancel` |
+| GET | `/worker-requests`, `/worker-requests/{id}` |
+| POST | `/worker-requests/{id}/respond`, `/worker-requests/{id}/answer`, `/worker-requests/{id}/deny`, `/worker-requests/{id}/cancel` |
 
 All paths above are relative to `/api/v1`. Creation/decisions return 201/202; callers
 inspect run state separately. Errors use 400 (validation), 403 (policy), 404, 409
@@ -37,6 +44,7 @@ laso pipeline show NAME
 laso run start NAME_OR_FILE [--input JSON] [--actor NAME]
 laso run list
 laso run show ID
+laso run inspect ID
 laso run cancel ID
 laso run resume ID
 laso approval list
@@ -45,13 +53,32 @@ laso approval reject ID [--actor NAME] [--comment TEXT]
 laso plugin list
 laso provider list
 laso tool list
+laso event-source list
+laso event-source show ID
+laso event-source enable ID
+laso event-source disable ID
+laso worker list
+laso worker show ID
+laso worker-job list
+laso worker-job show ID
+laso worker-job inspect ID
+laso worker-job cancel ID
+laso node-work list [--run-id ID]
+laso node-work show ID
+laso artifact list [--run-id ID]
+laso artifact verify
+laso artifact gc [--execute] [--grace-seconds N]
+laso instance list
 ```
 
 Pipeline IDs may be explicit revisions such as `research@2`; `pipeline show` and
 `run start` accept that identity. A run response includes its `pipeline_version`,
 parent fields when nested, and a `children` array containing child run IDs,
 pipeline revisions, parent node IDs and states. `run show` uses the same view as
-the API.
+the API. `run inspect`, `node-work`, and `worker-job inspect` are operator views:
+they omit message payloads, prompts, absolute artifact locations, and arbitrary
+provider metadata while retaining durable state, attempts, leases, fences,
+failures, and integrity summaries.
 
 CLI run commands wait until execution finishes or reaches a durable wait. JSON
 results go to stdout; logs/errors go to stderr. Failed/timed-out runs return status

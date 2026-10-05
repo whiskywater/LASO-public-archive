@@ -1,0 +1,17 @@
+laso: '1'
+name: phase1-real-agent-failure
+version: 1
+max_steps: 16
+timeout_ms: 60000
+nodes:
+  invalid_root:
+    type: worker
+    worker: codex
+    task_type: coding
+    capability: coding-agent
+    instructions: >-
+      This request must fail before provider execution because its project
+      directory is outside the configured allowed root. Do not edit files.
+edges:
+  - {from: input, to: invalid_root}
+  - {from: invalid_root, to: output}

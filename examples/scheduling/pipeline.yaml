@@ -1,0 +1,10 @@
+laso: '1'
+name: scheduled-work
+version: 1
+nodes:
+  normalize:
+    type: function
+    function: identity
+edges:
+  - {from: input, to: normalize}
+  - {from: normalize, to: output}

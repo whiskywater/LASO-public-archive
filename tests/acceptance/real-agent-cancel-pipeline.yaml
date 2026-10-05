@@ -1,0 +1,20 @@
+laso: '1'
+name: phase1-real-agent-cancel
+version: 1
+max_steps: 16
+timeout_ms: 120000
+nodes:
+  slow:
+    type: worker
+    worker: codex
+    task_type: coding
+    capability: coding-agent
+    timeout_ms: 60000
+    instructions: >-
+      Work only in the disposable project directory from the request metadata.
+      Do not edit any files. Run ./slow-task.sh exactly once and wait for it to
+      finish before replying. This is a cancellation exercise; do not shorten
+      or skip the wait.
+edges:
+  - {from: input, to: slow}
+  - {from: slow, to: output}

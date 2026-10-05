@@ -9,13 +9,16 @@ namespace beast = boost::beast;
 namespace http = beast::http;
 using Tcp = asio::ip::tcp;
 struct HttpServer::Impl : std::enable_shared_from_this<HttpServer::Impl> {
+  asio::thread_pool api_pool{1};
+  asio::strand<asio::thread_pool::executor_type> api_strand;
   asio::strand<asio::io_context::executor_type> strand;
   Tcp::acceptor acceptor;
   Api &api;
   std::set<std::shared_ptr<beast::tcp_stream>> sessions;
   bool stopping = false;
   Impl(asio::io_context &io, Api &api_ref, const std::string &host, unsigned short port)
-      : strand(asio::make_strand(io)), acceptor(strand), api(api_ref) {
+      : api_strand(asio::make_strand(api_pool)), strand(asio::make_strand(io)), acceptor(strand),
+        api(api_ref) {
     Tcp::endpoint endpoint(asio::ip::make_address(host), port);
     acceptor.open(endpoint.protocol());
     acceptor.set_option(Tcp::acceptor::reuse_address(true));
@@ -31,8 +34,16 @@ struct HttpServer::Impl : std::enable_shared_from_this<HttpServer::Impl> {
       stream->expires_after(std::chrono::seconds(15));
       co_await http::async_read(*stream, buffer, parser, asio::use_awaitable);
       auto request = parser.release();
-      auto result = api.handle(std::string(request.method_string()), std::string(request.target()),
-                               request.body(), std::string(request[http::field::authorization]));
+      const auto method = std::string(request.method_string());
+      const auto target = std::string(request.target());
+      const auto body = request.body();
+      const auto authorization = std::string(request[http::field::authorization]);
+      auto result = co_await asio::co_spawn(
+          api_strand,
+          [this, method, target, body, authorization]() -> Task<ApiResponse> {
+            co_return api.handle(method, target, body, authorization);
+          },
+          asio::use_awaitable);
       http::response<http::string_body> response{static_cast<http::status>(result.status), 11};
       response.set(http::field::content_type, "application/json");
       response.set(http::field::server, "LASO/0.1");

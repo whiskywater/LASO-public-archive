@@ -109,10 +109,10 @@ provided. The Compose example retains loopback API exposure using Linux host net
   CMake/YAML/source grammar, local references, and security-pattern checks passed.
 - **Statically reviewed:** boundaries, CMake targets, include/symbol consistency,
   ABI ownership, checkpoint handling, failure paths and deployment configuration.
-- **Ubuntu-tested:** GCC and Clang Debug builds and 75/75 CTest entries each;
-  ASan/UBSan 75/75; Linux formatting; clang-tidy exit 0; API/CLI/process/plugin
+- **Ubuntu-tested:** GCC and Clang Debug/Release builds and 177/177 CTest entries
+  each; ASan/UBSan 177/177; Linux formatting; clang-tidy exit 0; API/CLI/process/plugin
   tests; and a loopback local-model GPU inference run.
-- **Debian-tested:** GCC 14.2 build and 75/75 tests; the multi-stage runtime image
+- **Debian-tested:** the public Debian workflow; the multi-stage runtime image
   built and served its health endpoint with host networking as the unprivileged
   `laso` user.
 - **Pending/blocked:** full systemd deployment remains pending; TSan is blocked on this host by an `unexpected memory mapping` runtime

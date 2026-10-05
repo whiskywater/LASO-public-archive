@@ -84,24 +84,107 @@ ApiResponse Api::route(const std::string &method, const std::string &target, con
     return {200, service_.tools()};
   if (method == "GET" && target == "/api/v1/plugins")
     return {200, service_.plugins()};
+  if (method == "GET" && target == "/api/v1/instances")
+    return {200, service_.instances()};
   std::smatch match;
-  static const std::regex route_pattern(
-      "/api/v1/(pipelines|runs|approvals)(?:/([A-Za-z0-9_.@-]{1,128}))?(?:/"
-      "(runs|cancel|resume|events|attempts|messages|approve|reject))?");
+  static const std::regex route_pattern("/api/v1/"
+                                        "(pipelines|runs|approvals|worker-requests|schedules|"
+                                        "triggers|event-sources|workers|worker-jobs)(?:/"
+                                        "([A-Za-z0-9_.@-]{1,128}))?(?:/"
+                                        "(runs|cancel|resume|events|attempts|messages|approve|"
+                                        "reject|respond|answer|deny|enable|disable))?");
   if (!std::regex_match(target, match, route_pattern))
     return {404, {{"error", "Endpoint not found"}}};
   auto collection = match[1].str(), id = match[2].str(), action = match[3].str();
-  auto kind = collection == "pipelines" ? RecordKind::Pipeline
-              : collection == "runs"    ? RecordKind::Run
-                                        : RecordKind::Approval;
+  if (collection == "event-sources") {
+    if (method == "GET" && id.empty())
+      return {200, service_.event_sources()};
+    if (method == "GET" && action.empty())
+      return {200, service_.event_source(id)};
+    if (method == "POST" && !id.empty() && (action == "enable" || action == "disable")) {
+      service_.set_event_source_enabled(id, action == "enable");
+      return {202, service_.event_source(id)};
+    }
+    return {405, {{"error", "Method not supported"}}};
+  }
+  if (collection == "workers") {
+    if (method == "GET" && id.empty())
+      return {200, service_.workers()};
+    if (method == "GET" && action.empty())
+      return {200, service_.worker(id)};
+    return {405, {{"error", "Method not supported"}}};
+  }
+  if (collection == "worker-jobs") {
+    if (method == "GET" && id.empty())
+      return {200, service_.worker_jobs("", limit, offset)};
+    if (method == "GET" && action.empty())
+      return {200, service_.worker_job(id)};
+    if (method == "POST" && action == "cancel") {
+      service_.cancel_worker_job(id);
+      return {202, service_.worker_job(id)};
+    }
+    return {405, {{"error", "Method not supported"}}};
+  }
+  if (collection == "worker-requests") {
+    if (method == "GET" && id.empty())
+      return {200, service_.worker_interactions("", limit, offset)};
+    if (method == "GET" && action.empty())
+      return {200, service_.worker_interaction(id)};
+    if (method == "POST" && !id.empty() &&
+        (action == "respond" || action == "answer" || action == "approve" || action == "deny" ||
+         action == "cancel")) {
+      const auto state = action == "approve" ? WorkerInteractionState::Approved
+                         : action == "answer" || action == "respond"
+                             ? WorkerInteractionState::Answered
+                         : action == "cancel" ? WorkerInteractionState::Cancelled
+                                              : WorkerInteractionState::Denied;
+      service_.resolve_worker_interaction(id, state, body.value("payload", Json::object()),
+                                          actor.id, body.value("reason", std::string{}));
+      return {202, service_.worker_interaction(id)};
+    }
+    return {405, {{"error", "Method not supported"}}};
+  }
+  auto kind = collection == "pipelines"   ? RecordKind::Pipeline
+              : collection == "runs"      ? RecordKind::Run
+              : collection == "approvals" ? RecordKind::Approval
+              : collection == "schedules" ? RecordKind::Schedule
+                                          : RecordKind::Trigger;
   if (method == "GET" && id.empty())
     return {200, service_.list(kind, "", limit, offset)};
   if (method == "GET" && action.empty())
     return {200, collection == "runs" ? service_.run_view(id) : service_.get(kind, id)};
   if (method == "POST" && collection == "pipelines" && id.empty())
     return {201, service_.register_pipeline(body.at("yaml").get<std::string>())};
+  if (method == "POST" && collection == "schedules" && id.empty())
+    return {201, service_.create_schedule(body)};
+  if (method == "POST" && collection == "triggers" && id.empty())
+    return {201, service_.create_trigger(body)};
+  if (method == "PATCH" && collection == "schedules" && !id.empty() && action.empty())
+    return {200, service_.update_schedule(id, body)};
+  if (method == "PATCH" && collection == "triggers" && !id.empty() && action.empty())
+    return {200, service_.update_trigger(id, body)};
+  if (method == "DELETE" && collection == "schedules" && !id.empty() && action.empty()) {
+    service_.delete_schedule(id);
+    return {202, {{"id", id}, {"deleted", true}}};
+  }
+  if (method == "DELETE" && collection == "triggers" && !id.empty() && action.empty()) {
+    service_.delete_trigger(id);
+    return {202, {{"id", id}, {"deleted", true}}};
+  }
+  if (method == "POST" && collection == "schedules" && !id.empty() &&
+      (action == "enable" || action == "disable")) {
+    service_.set_schedule_enabled(id, action == "enable");
+    return {202, service_.get(RecordKind::Schedule, id)};
+  }
+  if (method == "POST" && collection == "triggers" && !id.empty() &&
+      (action == "enable" || action == "disable")) {
+    service_.set_trigger_enabled(id, action == "enable");
+    return {202, service_.get(RecordKind::Trigger, id)};
+  }
   if (method == "POST" && collection == "pipelines" && action == "runs")
-    return {202, {{"id", service_.start(id, body.value("input", Json::object()), actor.id)}}};
+    return {202,
+            {{"id", service_.start(id, body.value("input", Json::object()), actor.id, false,
+                                   Json::object(), body.value("metadata", Json::object()))}}};
   if (collection == "runs" && !id.empty()) {
     if (method == "GET" && (action == "events" || action == "attempts" || action == "messages")) {
       (void)service_.get(RecordKind::Run, id);

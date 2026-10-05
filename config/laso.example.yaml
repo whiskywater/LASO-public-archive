@@ -1,13 +1,91 @@
 data_dir: .laso
+artifact_root: .laso/artifacts
+# Local filesystem storage is the default and requires no cloud account.
+artifact_backend: filesystem
+# Object-backed workspaces and results are streamed through this store. Keep
+# limits bounded and use a trusted shared root only for multi-instance mode.
+max_artifact_bytes: 268435456
+max_artifact_temp_bytes: 536870912
+artifact_cleanup_grace_seconds: 3600
+# Optional authenticated gateway for remote workers. The owner enables the
+# listener; a remote worker sets artifact_service_url instead. Keep the token
+# in an environment variable or a protected deployment-local file.
+# artifact_service_host: 127.0.0.1
+# artifact_service_port: 0
+# artifact_service_url: "http://127.0.0.1:9090"
+# artifact_service_token: "<random-deployment-token>"
+# Optional S3-compatible backend (requires a LASO_ENABLE_S3=ON build).
+# Owners and workers access the same bucket directly. Credentials are read by
+# the AWS SDK credential provider chain, not from this YAML file.
+# artifact_backend: s3
+# artifact_s3_endpoint: "https://object-store.example.invalid"
+# artifact_s3_bucket: laso-test-bucket
+# artifact_s3_region: us-east-1
+# artifact_s3_prefix: artifact-test
+# artifact_s3_path_style: true
+# artifact_s3_connect_timeout_ms: 3000
+# artifact_s3_request_timeout_ms: 30000
+# artifact_s3_max_retries: 2
+# For isolated loopback MinIO tests only:
+# artifact_s3_endpoint: "http://127.0.0.1:9000"
+# artifact_s3_allow_http: true
+# SQLite is the default embedded backend. PostgreSQL is optional:
+# storage_backend: postgres
+# postgres_dsn: "host=127.0.0.1 port=5432 dbname=laso user=laso"
+# postgres_schema: public
+# PostgreSQL connection-pool limits (used only by the PostgreSQL backend).
+postgres_pool_min_connections: 1
+postgres_pool_max_connections: 4
+postgres_pool_acquisition_timeout_ms: 1000
+# Single-owner mode remains the default. Multi-instance execution is an explicit
+# PostgreSQL-only opt-in; it claims runs and eligible deterministic NodeWork.
+# execution_mode: multi_instance
+coordination:
+  mode: single_owner
+  lease_ttl_ms: 30000
+  heartbeat_interval_ms: 10000
+storage_backend: sqlite
 api_host: 127.0.0.1
 api_port: 8080
 workers: 2
 max_runs: 16
+max_pending_runs: 1024
 max_nodes: 32
 max_nodes_per_run: 8
 max_models: 4
 max_tools: 8
 max_subpipeline_depth: 16
+max_pending_scheduler_launches: 128
+max_event_trigger_depth: 16
+max_event_trigger_deliveries: 1024
+max_worker_jobs: 32
+max_worker_jobs_per_worker: 16
+# Optional worker budgets; zero disables each budget. Token and cost budgets
+# accumulate across jobs belonging to a single run.
+max_worker_wall_time_ms: 0
+max_worker_tokens_per_run: 0
+max_worker_cost_units_per_run: 0
+# Optional supervised coding-agent adapter. It is disabled unless configured.
+# process_workers:
+#   opencode:
+#     executable: /absolute/path/to/laso-opencode-worker
+#     args: [--opencode, /absolute/path/to/opencode, --allowed-root, /srv/laso/workspaces]
+#     startup_timeout_ms: 120000
+#     request_timeout_ms: 120000
+#     interaction_timeout_ms: 300000
+#   codex:
+#     executable: /srv/laso/bin/laso-codex-worker
+#     args: [--codex, /usr/local/bin/codex, --allowed-root, /srv/laso/workspaces]
+#     environment_allowlist: [HOME, CODEX_HOME, PATH]
+#     startup_timeout_ms: 120000
+#     request_timeout_ms: 120000
+#     interaction_timeout_ms: 300000
+#   claude:
+#     executable: /absolute/path/to/laso-claude-worker
+#     args: [--claude, /usr/local/bin/claude, --allowed-root, /projects/example]
+#     startup_timeout_ms: 5000
+#     request_timeout_ms: 120000
+#     interaction_timeout_ms: 300000
 log_level: info
 json_logs: false
 allow_network: false
@@ -16,6 +94,16 @@ allow_remote_api: false
 # inference runtime bound to 127.0.0.1. Leave empty to register only Mock.
 local_openai_endpoint: ""
 plugin_dirs: []
+# Generic native event sources are opt-in. Uncomment and point at a trusted,
+# explicitly built directory; source configuration is not a secret store.
+# plugin_dirs: [build/plugins]
+# event_sources:
+#   offline:
+#     plugin: example-event-source
+#     component: example-event
+#     enabled: false
+#     schema: event.schema.json
+#     config: {mode: deterministic}
 # Optional approved roots for node JSON Schemas. Empty uses the process directory.
 schema_roots: []
 models:

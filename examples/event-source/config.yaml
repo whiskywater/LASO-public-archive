@@ -1,0 +1,13 @@
+data_dir: .laso-event-source
+plugin_dirs:
+  - build/plugins
+schema_roots:
+  - examples/event-source
+event_sources:
+  offline:
+    plugin: example-event-source
+    component: example-event
+    schema: event.schema.json
+    enabled: false
+    config:
+      mode: deterministic

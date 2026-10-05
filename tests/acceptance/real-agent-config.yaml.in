@@ -1,0 +1,47 @@
+data_dir: @DATA_DIR@
+storage_backend: sqlite
+workers: 2
+max_runs: 4
+max_nodes: 8
+max_nodes_per_run: 2
+max_worker_jobs: 4
+max_worker_jobs_per_worker: 1
+api_host: 127.0.0.1
+api_port: 0
+log_level: warn
+json_logs: true
+allow_network: false
+allow_remote_api: false
+process_workers:
+  codex:
+    executable: @CODEX_WORKER@
+    args:
+      - --codex
+      - @CODEX_BIN@
+      - --allowed-root
+      - @WORKSPACE_ROOT@
+      - --timeout-ms
+      - "60000"
+    environment_allowlist: [HOME, CODEX_HOME, PATH]
+    startup_timeout_ms: 60000
+    request_timeout_ms: 60000
+    interaction_timeout_ms: 300000
+  opencode:
+    executable: @OPENCODE_WORKER@
+    args:
+      - --opencode
+      - @OPENCODE_BIN@
+      - --port
+      - "@OPENCODE_PORT@"
+      - --allowed-root
+      - @WORKSPACE_ROOT@
+      - --timeout-ms
+      - "60000"
+    environment_allowlist: [HOME, PATH]
+    environment:
+      XDG_DATA_HOME: @OPENCODE_DATA@
+      XDG_CONFIG_HOME: @OPENCODE_CONFIG@
+    startup_timeout_ms: 60000
+    request_timeout_ms: 60000
+    interaction_timeout_ms: 300000
+policies: []

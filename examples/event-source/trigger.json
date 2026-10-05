@@ -1,0 +1,7 @@
+{
+  "id": "offline-example-trigger",
+  "name": "offline example event trigger",
+  "pipeline": "event-source-example@1",
+  "event": "example.item.created",
+  "match": {"source": "offline-example"}
+}

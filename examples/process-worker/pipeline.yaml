@@ -1,0 +1,12 @@
+laso: '1'
+name: process-worker
+version: 1
+nodes:
+  work:
+    type: worker
+    worker: reference
+    task_type: deterministic
+    instructions: process the structured input
+edges:
+  - {from: input, to: work}
+  - {from: work, to: output}

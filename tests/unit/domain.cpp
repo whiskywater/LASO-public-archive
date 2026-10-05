@@ -1,9 +1,12 @@
 #include "../support.hpp"
+#include <fstream>
 #include <laso/policies/policy.hpp>
 #include <laso_plugin.h>
+#include <type_traits>
 
 using namespace laso;
 using namespace laso::test;
+static_assert(std::is_constructible_v<SQLiteStorage, const std::filesystem::path &>);
 TEST(Pipeline, ParsesTypedDefinition) {
   auto p = parse_pipeline(fixture("hello-pipeline"));
   EXPECT_EQ(p.name, "hello");
@@ -70,6 +73,100 @@ TEST(Configuration, ValidatesSubpipelineDepth) {
   EXPECT_THROW(c.validate(), Error);
   c.max_subpipeline_depth = 16;
   EXPECT_NO_THROW(c.validate());
+}
+TEST(Configuration, RejectsUnsupportedStorageBackend) {
+  Config c;
+  c.storage_backend = "postgres";
+  EXPECT_THROW(c.validate(), Error);
+  c.storage_backend = "sqlite";
+  EXPECT_NO_THROW(c.validate());
+}
+TEST(Configuration, ParsesDeclarativeEventSource) {
+  TemporaryDirectory dir;
+  const auto path = dir.path / "laso.yaml";
+  std::ofstream(path) << "event_sources:\n  offline:\n    plugin: example-event-source\n"
+                         "    component: example-event\n    enabled: true\n    config:\n"
+                         "      mode: once\n";
+  const auto c = load_config(path);
+  ASSERT_EQ(c.event_sources.size(), 1U);
+  EXPECT_EQ(c.event_sources.at("offline").plugin, "example-event-source");
+  EXPECT_TRUE(c.event_sources.at("offline").enabled);
+  EXPECT_EQ(c.event_sources.at("offline").config.at("mode"), "once");
+}
+TEST(Configuration, ParsesWorkerBudgets) {
+  TemporaryDirectory dir;
+  const auto path = dir.path / "laso.yaml";
+  std::ofstream(path) << "max_worker_wall_time_ms: 120000\n"
+                         "max_worker_tokens_per_run: 500000\n"
+                         "max_worker_cost_units_per_run: 2.5\n";
+  const auto c = load_config(path);
+  EXPECT_EQ(c.max_worker_wall_time_ms, 120000U);
+  EXPECT_EQ(c.max_worker_tokens_per_run, 500000U);
+  EXPECT_DOUBLE_EQ(c.max_worker_cost_units_per_run, 2.5);
+}
+TEST(Configuration, ParsesArtifactStoreSettings) {
+  TemporaryDirectory dir;
+  const auto path = dir.path / "laso.yaml";
+  std::ofstream(path) << "artifact_root: /var/tmp/laso-artifacts\n"
+                         "max_artifact_bytes: 1048576\n"
+                         "max_artifact_temp_bytes: 2097152\n"
+                         "artifact_cleanup_grace_seconds: 7200\n";
+  const auto c = load_config(path);
+  EXPECT_EQ(c.artifact_root, "/var/tmp/laso-artifacts");
+  EXPECT_EQ(c.max_artifact_bytes, 1048576U);
+  EXPECT_EQ(c.max_artifact_temp_bytes, 2097152U);
+  EXPECT_EQ(c.artifact_cleanup_grace_seconds, 7200U);
+}
+TEST(Configuration, ParsesAuthenticatedArtifactGatewaySettings) {
+  TemporaryDirectory dir;
+  const auto path = dir.path / "laso.yaml";
+  std::ofstream(path) << "artifact_service_host: 127.0.0.1\n"
+                         "artifact_service_port: 9090\n"
+                         "artifact_service_token: synthetic-token\n";
+  const auto c = load_config(path);
+  EXPECT_EQ(c.artifact_service_host, "127.0.0.1");
+  EXPECT_EQ(c.artifact_service_port, 9090U);
+  EXPECT_EQ(c.artifact_service_token, "synthetic-token");
+  std::ofstream(path) << "artifact_service_url: http://127.0.0.1:9090\n"
+                         "artifact_service_token: synthetic-token\n";
+  const auto worker = load_config(path);
+  EXPECT_EQ(worker.artifact_service_url, "http://127.0.0.1:9090");
+  EXPECT_EQ(worker.artifact_service_token, "synthetic-token");
+}
+TEST(Configuration, S3ArtifactBackendIsOptionalAndExplicit) {
+  TemporaryDirectory dir;
+  const auto path = dir.path / "laso.yaml";
+  std::ofstream(path) << "artifact_backend: s3\n"
+                         "artifact_s3_endpoint: http://127.0.0.1:9000\n"
+                         "artifact_s3_bucket: laso-test-bucket\n"
+                         "artifact_s3_prefix: artifact-test\n"
+                         "artifact_s3_path_style: true\n"
+                         "artifact_s3_allow_http: true\n";
+#ifdef LASO_HAS_S3
+  const auto config = load_config(path);
+  EXPECT_EQ(config.artifact_backend, "s3");
+  EXPECT_EQ(config.artifact_s3_bucket, "laso-test-bucket");
+  EXPECT_EQ(config.artifact_s3_prefix, "artifact-test");
+  EXPECT_TRUE(config.artifact_s3_path_style);
+  EXPECT_TRUE(config.artifact_s3_allow_http);
+#else
+  EXPECT_THROW(load_config(path), Error);
+#endif
+}
+TEST(Configuration, RejectsS3NamespaceEscapeAndUntrustedPlainHttp) {
+#ifdef LASO_HAS_S3
+  Config config;
+  config.artifact_backend = "s3";
+  config.artifact_s3_bucket = "laso-test-bucket";
+  config.artifact_s3_prefix = "../outside";
+  EXPECT_THROW(config.validate(), Error);
+  config.artifact_s3_prefix = "artifact-test";
+  config.artifact_s3_endpoint = "http://object-store.invalid:9000";
+  config.artifact_s3_allow_http = true;
+  EXPECT_THROW(config.validate(), Error);
+#else
+  GTEST_SKIP() << "S3 configuration validation is available only in an S3 build";
+#endif
 }
 TEST(Pipeline, RejectsUnboundedCycle) {
   auto yaml = fixture("bounded-loop");

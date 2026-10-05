@@ -1,0 +1,26 @@
+laso: '1'
+name: worker-adapter
+version: 1
+nodes:
+  prepare:
+    type: function
+    function: identity
+  execute:
+    type: worker
+    worker: offline
+    task_type: deterministic
+    instructions: return the deterministic worker result
+    output_schema: schemas/result.schema.json
+  verify:
+    type: validator
+    schema: schemas/result.schema.json
+  rejected:
+    type: function
+    function: identity
+edges:
+  - {from: input, to: prepare}
+  - {from: prepare, to: execute}
+  - {from: execute, to: verify}
+  - {from: verify, to: output, condition: accepted}
+  - {from: verify, to: rejected, condition: rejected}
+  - {from: rejected, to: output}

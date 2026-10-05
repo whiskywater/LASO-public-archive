@@ -4,6 +4,7 @@
 #include <laso/runtime/executor.hpp>
 #include <laso/schema/validator.hpp>
 #include <laso/tools/tool.hpp>
+#include <laso/workers/manager.hpp>
 
 namespace laso {
 struct NodeResult {
@@ -102,6 +103,23 @@ public:
 private:
   std::shared_ptr<Tool> tool_;
   AsyncLimiter &limiter_;
+};
+class WorkerNode final : public Node {
+public:
+  WorkerNode(std::shared_ptr<WorkerManager> manager, std::string worker_id, std::string task_type,
+             std::string instructions, std::string capability, std::string output_schema)
+      : manager_(std::move(manager)), worker_id_(std::move(worker_id)),
+        task_type_(std::move(task_type)), instructions_(std::move(instructions)),
+        capability_(std::move(capability)), output_schema_(std::move(output_schema)) {}
+  Task<NodeResult> execute(ExecutionContext &, const Message &) override;
+  std::string_view type() const noexcept override {
+    return "worker";
+  }
+
+private:
+  std::shared_ptr<WorkerManager> manager_;
+  std::string worker_id_, task_type_, instructions_, capability_;
+  std::string output_schema_;
 };
 class RouterNode : public Node {
 public:

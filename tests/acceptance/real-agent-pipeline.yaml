@@ -1,0 +1,64 @@
+laso: '1'
+name: phase1-real-agents
+version: 1
+max_steps: 64
+timeout_ms: 300000
+nodes:
+  fork:
+    type: parallel
+    join: join
+  codex:
+    type: worker
+    worker: codex
+    task_type: coding
+    capability: coding-agent
+    timeout_ms: 120000
+    max_attempts: 2
+    retry_delay_ms: 100
+    instructions: >-
+      In the disposable project directory from the request metadata, edit only
+      src/math.cpp. Implement saturating_sum with the requested validation and
+      both bounds. Do not run tests or edit any other file. Reply DONE when the
+      one-file change is complete.
+  opencode:
+    type: worker
+    worker: opencode
+    task_type: coding
+    capability: coding-agent
+    timeout_ms: 120000
+    max_attempts: 2
+    retry_delay_ms: 100
+    instructions: >-
+      In the disposable project directory from the request metadata, edit only
+      src/label.cpp. Implement slugify so it emits lower-case ASCII words
+      separated by single hyphens with no leading or trailing hyphen. Do not
+      run tests or edit any other file. Reply DONE when the one-file change is
+      complete.
+  deterministic:
+    type: validator
+    field: validation
+    value: true
+  validation_pass:
+    type: function
+    function: identity
+  validation_fail:
+    type: function
+    function: phase1_validation_failure
+  join:
+    type: join
+  review:
+    type: approval
+    reason: Review the two real-agent changes before deterministic build/test validation.
+edges:
+  - {from: input, to: fork}
+  - {from: fork, to: codex}
+  - {from: fork, to: opencode}
+  - {from: fork, to: deterministic}
+  - {from: codex, to: join}
+  - {from: opencode, to: join}
+  - {from: deterministic, to: validation_pass, condition: accepted}
+  - {from: deterministic, to: validation_fail, condition: rejected}
+  - {from: validation_pass, to: join}
+  - {from: validation_fail, to: output}
+  - {from: join, to: review}
+  - {from: review, to: output}

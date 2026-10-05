@@ -38,8 +38,12 @@ LASO_PLUGIN_EXPORT const laso_plugin_descriptor *laso_plugin_query(void) {
 LASO_PLUGIN_EXPORT int32_t laso_plugin_init(const laso_host_api *host, laso_plugin_handle *out) {
   static const char metadata[] = "{\"version\":\"1.0.0\",\"network\":false,\"remote\":false,"
                                  "\"capabilities\":[\"chat-completions\",\"structured-output\"]}";
-  static const laso_component component = {
-      sizeof(laso_component), LASO_COMPONENT_MODEL, "example-model", metadata, 0, generate, health};
+  static const laso_component component = {.struct_size = sizeof(laso_component),
+                                           .kind = LASO_COMPONENT_MODEL,
+                                           .name = "example-model",
+                                           .metadata_json = metadata,
+                                           .invoke = generate,
+                                           .health = health};
   if (!host || !out || host->abi_version != LASO_PLUGIN_ABI_VERSION || !host->register_component)
     return LASO_INVALID;
   if (host->register_component(host->host_context, &component) != LASO_OK)

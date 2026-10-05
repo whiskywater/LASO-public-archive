@@ -1,0 +1,13 @@
+data_dir: .laso-process-worker
+storage_backend: sqlite
+process_workers:
+  reference:
+    # Replace this with the absolute path produced by the build.
+    executable: /absolute/path/to/build/bin/laso-example-worker-host
+    args: [--mode, success]
+    startup_timeout_ms: 5000
+    request_timeout_ms: 5000
+max_worker_jobs: 4
+max_worker_jobs_per_worker: 2
+allow_network: false
+allow_remote_api: false

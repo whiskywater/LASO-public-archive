@@ -1,0 +1,28 @@
+laso: '1'
+name: distributed-real-workers
+version: 1
+nodes:
+  input: {type: input}
+  fork: {type: parallel, join: join}
+  codex:
+    type: worker
+    worker: codex
+    task_type: coding
+    instructions: "In src/math.cpp only, add the missing lower-bound and upper-bound checks to saturating_sum. Make the smallest edit possible, do not run tests or modify any other file, and report completion."
+  opencode:
+    type: worker
+    worker: opencode
+    task_type: coding
+    instructions: "In src/math.cpp only, add the missing lower-bound and upper-bound checks to saturating_sum. Make the smallest edit possible, do not run tests or modify any other file, and report completion."
+  deterministic: {type: function, function: identity}
+  join: {type: join}
+  output: {type: output}
+edges:
+  - {from: input, to: fork}
+  - {from: fork, to: codex}
+  - {from: fork, to: opencode}
+  - {from: fork, to: deterministic}
+  - {from: codex, to: join}
+  - {from: opencode, to: join}
+  - {from: deterministic, to: join}
+  - {from: join, to: output}

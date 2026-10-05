@@ -30,7 +30,8 @@ jobs:
       - name: clang-tidy
         if: matrix.compiler == 'clang'
         run: |
-          find src apps -name '*.cpp' -print0 | xargs -0 -n 1 clang-tidy-18 -p build
+          jq -r '.[].file | select(endswith(".cpp"))' build/compile_commands.json |
+            sort -u | xargs -r -n 1 clang-tidy-18 -p build
   sanitizers:
     runs-on: ubuntu-24.04
     steps:
@@ -44,6 +45,23 @@ jobs:
         env:
           ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
           UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+  release:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install release-build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake ninja-build libsqlite3-dev libyaml-cpp-dev nlohmann-json3-dev libspdlog-dev libcli11-dev libboost-system-dev libgtest-dev curl jq
+      - name: Configure Release build
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+      - run: cmake --build build --parallel 2
+      - run: ctest --test-dir build --output-on-failure
+      - name: Verify installed command-line tools
+        run: |
+          cmake --install build --prefix "$RUNNER_TEMP/laso-install"
+          test -x "$RUNNER_TEMP/laso-install/bin/laso"
+          "$RUNNER_TEMP/laso-install/bin/laso" version
   debian:
     runs-on: ubuntu-24.04
     container: debian:13
@@ -56,3 +74,91 @@ jobs:
       - run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug
       - run: cmake --build build --parallel 2
       - run: ctest --test-dir build --output-on-failure
+  postgres:
+    runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: laso_test
+          POSTGRES_USER: laso_ci
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U laso_ci -d laso_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install PostgreSQL build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake ninja-build libsqlite3-dev libyaml-cpp-dev nlohmann-json3-dev libspdlog-dev libcli11-dev libboost-system-dev libgtest-dev libpq-dev libpqxx-dev clang-tidy-18 curl jq
+      - name: Configure PostgreSQL build
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DLASO_ENABLE_POSTGRES=ON
+      - run: cmake --build build --parallel 2
+      - name: clang-tidy PostgreSQL build
+        run: |
+          jq -r '.[].file | select(endswith(".cpp"))' build/compile_commands.json |
+            sort -u | xargs -r -n 1 clang-tidy-18 -p build
+      - name: Run SQLite and PostgreSQL storage/runtime tests
+        run: ctest --test-dir build --output-on-failure
+        env:
+          LASO_TEST_POSTGRES_DSN: host=127.0.0.1 port=5432 dbname=laso_test user=laso_ci
+  s3:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install LASO and AWS SDK build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake ninja-build git libsqlite3-dev libyaml-cpp-dev nlohmann-json3-dev libspdlog-dev libcli11-dev libboost-system-dev libgtest-dev curl jq libcurl4-openssl-dev libssl-dev zlib1g-dev
+      - name: Start disposable loopback-only MinIO
+        run: |
+          if ss -ltn | grep -q ':19387 '; then echo 'test port is already in use' >&2; exit 1; fi
+          access_key="$(openssl rand -hex 16)"
+          secret_key="$(openssl rand -hex 32)"
+          printf 'AWS_ACCESS_KEY_ID=%s\nAWS_SECRET_ACCESS_KEY=%s\n' \
+            "$access_key" "$secret_key" >> "$GITHUB_ENV"
+          docker run --detach --name laso-m4-minio \
+            --publish 127.0.0.1:19387:9000 \
+            --env MINIO_ROOT_USER="$access_key" \
+            --env MINIO_ROOT_PASSWORD="$secret_key" \
+            quay.io/minio/minio:RELEASE.2024-11-07T00-52-20Z \
+            server /data
+          for attempt in {1..30}; do
+            if curl --connect-timeout 2 --max-time 2 -fsS \
+              http://127.0.0.1:19387/minio/health/live >/dev/null 2>&1; then
+              exit 0
+            fi
+            sleep 1
+          done
+          echo 'MinIO did not become healthy within the bounded startup window' >&2
+          docker inspect --format 'state={{.State.Status}} exit={{.State.ExitCode}}' \
+            laso-m4-minio >&2 || true
+          exit 1
+      - name: Build optional AWS SDK S3 component
+        run: |
+          git clone --recurse-submodules --depth 1 --branch 1.11.890 \
+            https://github.com/aws/aws-sdk-cpp.git "$RUNNER_TEMP/aws-sdk-cpp"
+          cmake -S "$RUNNER_TEMP/aws-sdk-cpp" -B "$RUNNER_TEMP/aws-sdk-cpp-build" \
+            -DBUILD_ONLY=s3 -DAUTORUN_UNIT_TESTS=OFF -DBUILD_SHARED_LIBS=OFF \
+            -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$RUNNER_TEMP/aws-sdk"
+          cmake --build "$RUNNER_TEMP/aws-sdk-cpp-build" --parallel 2
+          cmake --install "$RUNNER_TEMP/aws-sdk-cpp-build"
+      - name: Build and run S3-enabled LASO regression suite
+        run: |
+          CMAKE_PREFIX_PATH="$RUNNER_TEMP/aws-sdk" cmake -S . -B build-s3 -G Ninja \
+            -DCMAKE_BUILD_TYPE=Debug -DLASO_ENABLE_S3=ON
+          cmake --build build-s3 --parallel 2
+          ctest --test-dir build-s3 --output-on-failure
+        env:
+          AWS_DEFAULT_REGION: us-east-1
+          AWS_EC2_METADATA_DISABLED: "true"
+          LASO_S3_TEST_ENDPOINT: http://127.0.0.1:19387
+          LASO_S3_TEST_BUCKET: laso-test-bucket
+      - name: Stop disposable MinIO
+        if: always()
+        run: docker rm --force laso-m4-minio || true

@@ -26,13 +26,13 @@ int32_t laso_plugin_init(const laso_host_api *host, laso_plugin_handle *out) {
       host->abi_version != LASO_PLUGIN_ABI_VERSION)
     return LASO_INVALID;
   laso_component component = {
-      sizeof(laso_component),
-      LASO_COMPONENT_TOOL,
-      "example.echo",
-      "{\"description\":\"Native JSON echo\",\"network\":false,\"timeout_ms\":1000}",
-      &instance,
-      echo,
-      NULL};
+      .struct_size = sizeof(laso_component),
+      .kind = LASO_COMPONENT_TOOL,
+      .name = "example.echo",
+      .metadata_json =
+          "{\"description\":\"Native JSON echo\",\"network\":false,\"timeout_ms\":1000}",
+      .instance = &instance,
+      .invoke = echo};
   int32_t status = host->register_component(host->host_context, &component);
   if (status != LASO_OK)
     return status;

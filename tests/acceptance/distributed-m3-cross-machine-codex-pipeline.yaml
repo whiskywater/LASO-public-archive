@@ -1,0 +1,27 @@
+laso: '1'
+name: distributed-cross-machine-codex
+version: 1
+max_steps: 64
+timeout_ms: 300000
+nodes:
+  input: {type: input}
+  fork: {type: parallel, join: join}
+  codex:
+    type: worker
+    worker: codex
+    task_type: coding
+    capability: coding-agent
+    timeout_ms: 120000
+    max_attempts: 2
+    retry_delay_ms: 100
+    instructions: "Repair the two requested helpers in src/math.cpp and src/label.cpp. Add the missing lower-bound and upper-bound checks to saturating_sum, and implement slugify as described in TASK.md. Make the smallest source-only edit possible, do not run tests or modify any other file, and report completion."
+  deterministic: {type: function, function: identity}
+  join: {type: join}
+  output: {type: output}
+edges:
+  - {from: input, to: fork}
+  - {from: fork, to: codex}
+  - {from: fork, to: deterministic}
+  - {from: codex, to: join}
+  - {from: deterministic, to: join}
+  - {from: join, to: output}
