@@ -11,7 +11,7 @@ max_worker_jobs: 4
 max_worker_jobs_per_worker: 1
 coordination:
   mode: experimental_multi_instance
-  lease_ttl_ms: 3000
+  lease_ttl_ms: @LEASE_TTL_MS@
   heartbeat_interval_ms: 200
 api_host: 127.0.0.1
 api_port: 0
@@ -27,7 +27,7 @@ process_workers:
   codex:
     executable: @CODEX_WORKER@
     args: [--codex, @CODEX_BIN@, --allowed-root, @WORKSPACE_ROOT@, --timeout-ms, "180000"]
-    environment_allowlist: [HOME, CODEX_HOME, PATH]
+    environment_allowlist: [HOME, CODEX_HOME, PATH, LASO_CODEX_FIXTURE_MODE, LASO_CODEX_FIXTURE_MARKER, LASO_CODEX_FIXTURE_DONE_MARKER, LASO_CODEX_FIXTURE_ARTIFACT_CONTENT, LASO_CODEX_FIXTURE_SLEEP_MS]
     startup_timeout_ms: 180000
     request_timeout_ms: 180000
     interaction_timeout_ms: 300000

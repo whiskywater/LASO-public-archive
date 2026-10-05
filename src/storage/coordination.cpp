@@ -170,8 +170,9 @@ public:
     try {
       pqxx::work tx(lease.connection());
       const auto result = tx.exec_params(
-          "DELETE FROM laso_coordination_leases WHERE resource_key = $1 AND owner_instance = $2 "
-          "AND fencing_token = $3 RETURNING resource_key",
+          "UPDATE laso_coordination_leases SET expires_at = clock_timestamp() "
+          "WHERE resource_key = $1 AND owner_instance = $2 AND fencing_token = $3 "
+          "AND expires_at > clock_timestamp() RETURNING resource_key",
           lease_record.resource_key, lease_record.owner_instance, lease_record.fencing_token);
       tx.commit();
       return !result.empty();

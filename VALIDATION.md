@@ -640,17 +640,14 @@ same run remained Completed and the owner verified both objects again (2/2).
 The two hosts did not share a local workspace path. This used a deterministic
 fixture, not the real Codex CLI/provider.
 
-Worker loss during upload, in-flight transfer interruption, owner death while
-a worker is active, and stale-worker publication against S3 remain **NOT RUN**.
+At that earlier checkpoint, worker loss during upload, in-flight transfer interruption, owner death while a worker was active, and stale-worker publication against S3 were **NOT RUN**. The recovered physical checkpoint below adds a partial pre-publication attempt and TLS certificate results; the other failure gates remain open.
 With the workflow already Completed, stopping MinIO made the owner's artifact
 verification exit nonzero and report both objects invalid (2/2); the durable
 workflow state remained Completed. After
 MinIO was restored, verification recovered to 2/2 with no errors. This is a
 retrieval outage/recovery check, not an in-flight worker interruption test. The
 two-service PostgreSQL and stale-fence integration cases did pass in the full
-suite, but they do not substitute for S3-specific worker chaos cases. AWS S3
-compatibility and HTTPS certificate validation were also **NOT RUN**; the tested
-service was MinIO and the test-only endpoint used loopback HTTP.
+suite, but they do not substitute for S3-specific worker chaos cases. AWS S3 compatibility was **NOT RUN** at that checkpoint; the recovered physical checkpoint below records the private-CA TLS checks. The earlier endpoint tests used MinIO.
 
 | Distributed / integrity scenario | Result |
 |---|---|
@@ -661,16 +658,184 @@ service was MinIO and the test-only endpoint used loopback HTTP.
 | Duplicate concurrent publication and retrieval of existing content | **PASS** |
 | Corrupt bytes at expected content key rejected by retrieval/integrity scan | **PASS** |
 | Unavailable S3 endpoint during put preflight fails bounded and publishes no artifact metadata | **PASS** |
-| Worker killed before/during/after artifact upload | **NOT RUN** |
-| Owner killed/restarted while a remote worker is active | **NOT RUN** (restart after completed run passed separately) |
-| S3 outage during artifact retrieval and service recovery | **PASS**; post-completion integrity verification failed closed (2/2 invalid), workflow state stayed Completed, then verification recovered to 2/2 after MinIO restart |
-| Temporary S3 network interruption during a live worker transfer | **NOT RUN** |
-| PostgreSQL outage/recovery during an S3-backed worker attempt | **NOT RUN** |
-| Stale worker fencing against an S3 artifact completion | **NOT RUN** (the general PostgreSQL stale-fence suite passed, but not with this S3 workflow) |
-| AWS S3 behavior and HTTPS certificate validation | **NOT RUN** |
+| Worker killed before artifact publication | **PASS**; the corrected physical rerun verified the selected process tree exited, the S3 object was absent at the fault point, and a replacement attempt completed with authoritative output |
+| Worker killed during S3 publication | **PASS**; process tree killed during an 8 MiB transfer and the run recovered |
+| Worker killed after S3 publication but before completion | **PASS**; published object survived worker loss and a replacement completed the run |
+| Owner killed/restarted while a remote worker is active | **PASS**; only the owner process was terminated and the run recovered to Completed |
+| S3 outage during an active transfer | **PASS**; only the disposable S3-compatible service was interrupted and restored; the transfer retried |
+| PostgreSQL outage/recovery during an S3-backed worker attempt | **PASS**; only the disposable PostgreSQL service was stopped briefly; the API recovered and the run completed |
+| Stale worker fencing against an S3 artifact completion | **PASS**; stale job and attempt became Failed; the accepted manifest names the completed replacement attempt |
+| S3 outage during artifact retrieval and service recovery | **PASS**; post-completion verification failed closed while run state stayed Completed, then recovered after service restoration |
+| Trusted TLS certificate | **PASS**; private CA accepted with verification enabled |
+| Untrusted TLS certificate rejection | **PASS**; untrusted CA rejected with verification enabled and no bypass |
+| Direct AWS S3 compatibility | **NOT RUN**; physical acceptance used a disposable S3-compatible service |
+
+### Recovered physical M4.1 checkpoint history (2026-09-24)
+
+The table below preserves the state recovered from the interrupted session before the follow-up physical runs. Current acceptance results are recorded in the next section.
+
+The interrupted acceptance session completed one normal physical cross-machine S3
+run using the generic roles `owner-host` and `worker-host`. The disposable
+PostgreSQL database and S3-compatible service were on the owner side; the worker
+connected over the real network. Test-only credentials and a private CA were
+used. This checkpoint records the results recovered from the session log and
+disposable database.
+
+| Gate | Run / attempt | Initial state and fault | Evidence and final state | Result |
+|---|---|---|---|---|
+| Physical baseline | Run `61a7bbb7-c541-4775-81c4-4cdd861f1a6d`; worker attempt `9eecabde-842c-4009-b7e6-e9ed983b5ed7` | Fresh disposable schema and S3 prefix; no injected fault | Run reached Completed. Owner retrieved and verified the 29-byte `remote-artifact.txt`; SHA-256 `c2b480081bd1f9af06c970024ad88096dd5b0cfefe1a52e894135882865d9600`. PostgreSQL recorded the completed run and S3 artifact metadata. | **PASS** |
+| Worker death before publication | Runs `8df44fb9-0c95-4268-990a-fc84bd1f6f9a` and `aa90c1ab-1aca-4ce6-89b4-4dc795d00029`; attempts `a66f7f49-fd1b-4203-a973-5cfde2dc3b13`, `d4e228f8-2004-4c00-b3f1-7d9bb7f9a0f8`, `3e5e3539-b396-4d5e-a664-04d488892be5` | Fresh disposable schemas and prefixes; worker was targeted for termination at the pre-publication barrier | First run paused at the barrier and the expected S3 object returned 404, but the original harness did not verify the target process had exited and an empty release marker blocked recovery. In the follow-up run, retry lease renewals failed, the worker result was rejected, and the owner run ended Failed with `Pipeline execution failed`. No authoritative artifact completion was established. The follow-up ended in the disposable PostgreSQL database; no S3 artifact SHA-256 applies. | **PARTIAL**; recovery failed and verified process termination is still required |
+| Worker death during S3 publication | — | Not run | No physical transfer was interrupted. | **NOT RUN** |
+| Worker death after S3 publication, before completion | — | Not run | No post-publication barrier was exercised. | **NOT RUN** |
+| S3 outage during active transfer | — | Not run | Only completed-run retrieval outage/recovery had passed at the earlier checkpoint; it does not cover an active transfer. | **NOT RUN** |
+| Owner death during worker execution | — | Not run | No owner process was terminated during active S3-backed work. | **NOT RUN** |
+| PostgreSQL interruption during S3-backed work | — | Not run | No database interruption was injected into the disposable PostgreSQL service. | **NOT RUN** |
+| Stale worker publication | — | Not run | No stale attempt was challenged against the authoritative S3 result. | **NOT RUN** |
+| Trusted TLS certificate | Focused S3 suite; no workflow run ID | Disposable HTTPS S3 service with generated private CA installed as trusted | TLS-enabled focused suite passed 19/19; a trusted private CA was accepted with verification enabled. Per-case artifact digest was not retained in the recovered summary. | **PASS** |
+| Untrusted TLS certificate rejection | Focused S3 suite; no workflow run ID | Disposable HTTPS S3 service using a CA absent from the trust bundle | TLS-enabled focused suite passed 19/19; the untrusted certificate was rejected with verification enabled and no bypass configured. | **PASS** |
+
+The acceptance harness verifies the selected remote PID tree exits after
+`KILL`, allows an empty fault-release marker, and checks that a stale worker job
+and its scheduler attempt both become terminal before accepting a replacement
+result. Its PostgreSQL and S3 outage paths validate an explicitly configured
+test-only container and restore it during cleanup. These checks were exercised
+in the physical cases below. The harness uses only disposable resources.
+
+### Current M4.1 physical acceptance results (2026-09-25)
+
+The owner and worker ran on separate physical systems over the real network.
+The owner hosted the disposable PostgreSQL database and S3-compatible service;
+all credentials and endpoints were test-only. The deterministic worker fixture
+produced fixed artifacts. Each completed run was checked in PostgreSQL, and the
+owner downloaded and verified the returned content-addressed object by size and
+SHA-256.
+
+| Case | Run and authoritative attempt | Fault and lease/fence evidence | PostgreSQL, S3, and recovery | Result |
+|---|---|---|---|---|
+| Physical baseline | Run `61a7bbb7-c541-4775-81c4-4cdd861f1a6d`; attempt `9eecabde-842c-4009-b7e6-e9ed983b5ed7` | No injected fault; distinct owner and worker machines | Run Completed; owner verified the 29-byte artifact, SHA-256 `c2b480081bd1f9af06c970024ad88096dd5b0cfefe1a52e894135882865d9600` | **PASS** |
+| Worker killed before publication | Run `6aa7a8db-3966-481e-904a-2f8850a4454d`; interrupted attempt `d02b959a-e4c3-4371-8a42-12d93ea3889d`; accepted attempt `176e681b-68e7-45a2-b4b0-0cb5a2d22771` | S3 object absent at the pre-publication barrier; the worker process tree was confirmed dead. Recovery acquired a higher fence; accepted provenance fence `2` | PostgreSQL NodeWork and run completed on retry. Owner retrieved and verified the 29-byte artifact, SHA-256 `c2b480081bd1f9af06c970024ad88096dd5b0cfefe1a52e894135882865d9600` | **PASS** |
+| Worker killed during publication | Run `5dd2aee5-4cd6-4c7f-96c4-525bc95ff2f7`; accepted attempt `159ae2b6-91ac-4a62-8c48-9395316f4090` | Worker process tree killed at 65,524 of 8,388,608 bytes uploaded; accepted provenance fence `11` | Retry recovered and owner verified the 8 MiB object, SHA-256 `695861265ca767585d7ea8e6e5f1f0f7718087d0c3af5fbc75382d6f3df8a6e6`; final run Completed | **PASS** |
+| Worker killed after publication | Run `625ba770-8cc8-49bf-bdcc-6a2f04e7d6d7`; accepted attempt `e7031807-9f94-4f1e-b803-293473d9e05f` | S3 publication marker observed before worker death and before run completion; accepted provenance fence `7` | Replacement recovered the run; owner verified the 8 MiB object, SHA-256 `695861265ca767585d7ea8e6e5f1f0f7718087d0c3af5fbc75382d6f3df8a6e6`; final run Completed | **PASS** |
+| S3 outage during active transfer | Run `257107a8-6add-4e9f-9f63-f211a2edc510`; accepted attempt `d62aece9-6ece-40ab-8eb4-892520d9ff53` | Disposable S3-compatible service stopped after 131,048 of 8,388,608 bytes; service restored; final provenance fence `20` | Transfer retried; PostgreSQL recorded completion; owner verified the 8 MiB object, SHA-256 `695861265ca767585d7ea8e6e5f1f0f7718087d0c3af5fbc75382d6f3df8a6e6` | **PASS** |
+| Owner death during worker execution | Run `b90dbc32-3acb-456b-933f-0cba69791631`; accepted attempt `4e387c8f-63ba-4b55-af54-429acb7af8cb` | Owner process killed while the worker job was active; only that process was terminated; accepted provenance fence `1` | Owner restarted; PostgreSQL run and NodeWork recovered to Completed; owner verified the 29-byte artifact, SHA-256 `c2b480081bd1f9af06c970024ad88096dd5b0cfefe1a52e894135882865d9600` | **PASS** |
+| PostgreSQL interruption | Run `3a3f08c5-f101-4267-a33c-53e9635d404e`; accepted attempt `1834f653-35c2-4e26-a122-c15ee183597f` | Disposable PostgreSQL service stopped for 3 seconds during active work; lease TTL was 30 seconds; bounded startup timeout prevented a TCP-accepted but silent endpoint from blocking indefinitely; accepted provenance fence `2` | One attempt failed during the outage and a retry completed after database recovery; owner API passed 20 health cycles; owner verified the 29-byte artifact, SHA-256 `c2b480081bd1f9af06c970024ad88096dd5b0cfefe1a52e894135882865d9600` | **PASS** |
+| Stale worker publication/fencing | Run `5d0aec03-7fb8-4f1d-9638-db08077ab769`; stale attempt `2e93d477-4277-4b98-82b9-d867eb04ac63`; accepted attempt `c0ede17b-3c40-45bd-9e27-d1587075ce60` | Old worker was suspended past the staleness interval. Its job and attempt were recorded Failed after losing authority. Replacement attempt completed with fence `2`; accepted manifest names that completed attempt | PostgreSQL run and NodeWork completed. Owner retrieved `winning-attempt` (16 bytes), SHA-256 `50723b3848c94826d73c5b60fed653601b35451d2ae3d4e4e1ade650c4b8040a`; stale output did not become authoritative | **PASS** |
+| Trusted TLS | Focused TLS-enabled S3 suite | Generated private CA trusted by the client; verification remained enabled | Focused suite passed 19/19; certificate accepted | **PASS** |
+| Untrusted TLS | Focused TLS-enabled S3 suite | Certificate authority absent from the trust bundle; no verification bypass | Focused suite passed 19/19; certificate rejected | **PASS** |
+
+The first stale-worker run correctly fenced the result but left its historical
+attempt record marked `Running` after the worker job was `Failed`. Recovery now
+marks that prior attempt `Failed` in the same PostgreSQL transaction that
+claims the replacement NodeWork under its newer lease. A crash-takeover
+regression and the physical stale-worker rerun both verify the terminal history.
+
+A stalled PostgreSQL startup was also reproduced with a server that accepted TCP
+but never answered the PostgreSQL protocol. The prior synchronous libpq startup
+could block beyond the pool acquisition timeout because `connect_timeout` does
+not bound the post-TCP startup handshake. The pool now uses `pqxx::connecting`
+and a deadline-driven socket poll; the new probe fails within its 100 ms bound.
+
+The lease release path now expires the row instead of deleting it, preserving
+monotonic fencing tokens. Its regression verifies that reacquisition increases
+the token and that a prior token cannot write. The focused owner tests and the
+physical recovery runs passed with this behavior.
+
+The full local CTest suite, excluding the opt-in physical acceptance test,
+passed 237 tests; 6 opt-in S3/Codex tests were skipped. The owner and worker
+builds succeeded. Hosted CI and PR review remain before merge.
 
 The deterministic Codex protocol fixture now has a mode that writes a fixed
 artifact into the workspace supplied by the worker request. Its focused local
 test passed (1/1). This provides a reproducible artifact-producing worker for a
 future distributed acceptance run; it does not change or validate production
 worker routing.
+
+
+## M5.1 durable session journal and replay (2026-09-25)
+
+The M5.1 acceptance boundary was reviewed against the implementation and tested
+with SQLite and the disposable PostgreSQL backend. M5.1 persists accepted input
+and observable events; it does not execute accepted turns or persist provider
+continuation state.
+
+| Acceptance case | Evidence | Result |
+|---|---|---|
+| Identical idempotent retry | API retry returns the original turn record and leaves one `input.accepted` event in the ordered journal. | **PASS** |
+| Conflicting idempotency-key reuse | API returns HTTP 409; the original turn and event remain unchanged. | **PASS** |
+| Concurrent submissions | Twelve actual concurrent storage writers produce one contiguous, duplicate-free per-session event sequence on SQLite and PostgreSQL. | **PASS** |
+| Close versus input acceptance | Concurrent close and submit serialize transactionally: either the input commits before the final close event, or it is rejected after close; no partial turn/event is stored. | **PASS** |
+| Service restart | Recreated SQLite-backed service retains open and closed session state, accepted turns, event sequence, replay, and rejection of new closed-session input. | **PASS** |
+| Storage reopen | Session acceptance, ordered journal, close event, and replay survive storage connection reopen on both enabled backends. | **PASS** |
+| SSE cursor resume | Disconnect/reconnect with nonzero `Last-Event-ID` returns only later events; the final `session.closed` event is delivered and the stream terminates. | **PASS** |
+| PostgreSQL cross-instance replay/live observation | Independent LASO service instances share a disposable schema; an observer replays a committed event and receives a later writer event over an open SSE stream using a nonzero `Last-Event-ID`. | **PASS** |
+| SQLite deployment boundary | Existing configuration validation rejects SQLite with `execution_mode: multi_instance`; session documentation makes SQLite's single-instance scope explicit. | **PASS** |
+| Query bounds and request sizes | API pagination, cursor parsing, request-size checks, event-page limits, and bounded SSE duration/stream count were reviewed; existing API limit regression passes. | **PASS** |
+
+The Linux GCC Debug build with PostgreSQL and S3 enabled completed. The serial
+normal CTest suite listed 251 tests: 245 passed, 6 opt-in S3/Codex fixtures were
+skipped, and none failed. The separate physical `distributed_m3_acceptance` test
+was not repeated for M5.1 because M5.1's cross-instance requirement is covered
+by independent services sharing PostgreSQL. `clang-format-18 --dry-run
+--Werror` and `git diff --check` passed. Hosted CI on PR #13 head `0fef776` passed all 7 checks: GCC, Clang, Release, PostgreSQL, S3, Debian, and ASan/UBSan.
+
+## M5.2 physical worker recovery and stale fencing retest (2026-09-26)
+
+This is targeted recovery evidence, not M5.2 closure. Both valid cases used
+separate physical test hosts, a disposable PostgreSQL backend, and the
+side-effect-free continuation fixture. Hostnames, account names, process IDs,
+run identifiers, continuation sentinels, and private log paths are omitted.
+
+| Case | Controlled fault and observation | Result |
+|---|---|---|
+| Worker death after durable binding and provider start | The worker was held after entering the deterministic provider, then only its verified test process received `SIGKILL`. Its bound run was reclaimed under a newer fence. The session remained open, cancellation stayed false, one logical run and one completion event remained authoritative, and only the recovery result's continuation was stored. The next queued turn also succeeded. | **PASS: 1/1 fresh physical run** |
+| Stale worker while replacement is active | The original worker was paused after acquiring the run lease. A replacement acquired a newer fence and was held in its provider call. The original then resumed and reached the real fenced checkpoint rejection while the replacement was still active. At that barrier the durable turn remained running with no completion event or continuation. After release, the replacement completed; its output and continuation were authoritative. | **PASS: 1/1 fresh physical run** |
+
+The earlier worker-death symptom was not reproduced by either the fresh hard-kill
+run or the two retained controlled hard-kill runs. The earlier diagnostic logs
+were not retained, so the exact historical caller cannot be attributed
+conclusively. Source review did identify a concrete fixture path capable of
+producing the reported `Execution cancelled`: the previous process fixture
+called `Service::shutdown()` after its fixed polling deadline; shutdown stops
+active execution tokens, and the execution cancellation path may persist a
+cancelled run without an explicit session cancellation request. Explicit
+session close and recovery of a persisted closing session route through
+`Runtime::cancel()` / `Runtime::cancel_locked()`, which records durable
+cancellation. The revised fixture verifies the held process and barrier, refuses
+graceful teardown before a terminal state, and uses hard process death for this
+gate. The physical run showed no cancellation request or cancelled event.
+
+Run-binding and pre-completion crash recovery passed in an earlier controlled
+block on the then-current recovered source tree; the retained snapshots do not
+embed a Git SHA or executable hash, so they remain historical rather than
+fresh exact-candidate evidence. The physical PostgreSQL interruption result is
+also retained only as historical evidence without an embedded tested SHA.
+Neither case was repeated in this retest. M5.2 closure status and remaining
+gates are summarized in the following ledger; PR #14 stays Draft.
+
+
+
+## M5.2 bounded acceptance closure review (2026-09-26)
+
+This ledger maps the acceptance boundary in `docs/m5-2-design.md`, the M5.2 roadmap entry, and PR #14. PR #14 remains open and Draft. The executable candidate `8132de1` passed both exact-SHA hosted workflows: pull-request run `36276098931` and push run `36276095925`. Since the inherited physical runtime candidate, `d5bb982` changed close handling; later commits `9c40e65` and `8132de1` changed the test harness and validation docs. Worker-death and stale-fence execution paths were not changed.
+
+Earlier candidate `d5bb982` exposed an intermittent PostgreSQL test hang. Its pull-request full CTest run passed 256 tests with 3 skips, but its separate three-repeat contention step timed out on `Sessions.PostgresTwoInstancesDeduplicateConcurrentSubmissions` after 1,500 seconds. The push full CTest run timed out on the same test. Candidate `9c40e65` bounded the fixture and recorded stages, but its PR repeat failed on the second test repetition and its push full CTest failed the case. Both traces showed the provider watchdog expiring before the retry returned, followed by extra provider calls. Source inspection identified the fixture's synchronous condition-variable wait inside an async provider coroutine; that fixture blocked the service executor during the retry observation. This was a fixture defect; those results did not establish a runtime idempotency defect.
+
+Commit `8132de1` changes only that fixture to cooperatively suspend through `ExecutionContext::delay`, preserving the 10-second watchdog and assertions. Pull-request CTest passed 256, failed 0, skipped 3 in 94.03 seconds; push CTest passed 256, failed 0, skipped 3 in 106.50 seconds. On each workflow, both dispatch/order and concurrent-idempotency tests passed all three dedicated repetitions (3/3 each). All eight hosted jobs passed on both events: GCC Debug/Release, Clang Debug/Release, PostgreSQL, S3-enabled, ASan/UBSan, and Debian. The two S3-disabled configuration tests and opt-in `distributed_m3_acceptance` were skipped; the dedicated S3-enabled job passed. The M3 test requires its separate DSN and is outside the deterministic M5.2 core suite.
+
+No local build/test or physical fault injection was run in this closure pass. A fresh read-only owner-host preflight found an active backup workload and unrelated compute/storage/monitoring activity; GPU telemetry again failed NVML initialization. The other physical host was not preflighted because cross-host fault injection was unsafe without a safe owner-host window.
+
+| Requirement and source | Implementation / focused test | Backend, topology, and evidence | Result and smallest action |
+|---|---|---|---|
+| Durable accepted-to-run dispatch, sequence order, one run binding, cross-session progress (`docs/m5-2-design.md`) | `Sessions.AcceptedTurnsExecuteDurablyInAcceptanceOrder`, `Sessions.QueuedRunRecoversAfterServiceRestartWithoutDuplicateRun`, `Sessions.DifferentSessionsExecuteConcurrently` | Exact 8132de1 pull-request PostgreSQL CTest, run `36276098931`; SQLite and PostgreSQL-enabled build. | **PASS**: full suite passed; run binding, restart reclaim, ordering, and cross-session progress tests were included. |
+| Identical and conflicting idempotency retries, including concurrent submissions across service instances (roadmap; PR acceptance) | `Sessions.PostgresTwoInstancesDeduplicateConcurrentSubmissions`; queued/running/completed retries, conflicting reuse, one event/run lineage, conflict preservation | Exact 8132de1 full PostgreSQL CTest passed in both workflow events; dedicated contention step passed this test 3/3 in each. Two independent LASO instances shared only the test's isolated schema. | **PASS** for deterministic PostgreSQL acceptance. |
+| Opaque continuation persistence, restart, isolation, invalid/unsupported state, timeout/cancellation, stale promotion, and secrecy (`docs/m5-2-design.md`) | SQLite/PostgreSQL continuation restart tests, invalid/timeout, unsupported/stateless, stale-completion and close-after-provider tests; runtime canary checks API/run/event/SSE/log/error surfaces | Exact 8132de1 full PostgreSQL CTest passed on both workflow events; deterministic fixtures on SQLite and disposable PostgreSQL. Codex/Claude/OpenCode worker adapters remain non-continuation-capable; no live provider call is required by this contract. | **PASS** for fixture and client-boundary coverage; no real continuation handle or credential used. |
+| PostgreSQL multi-instance ownership/fencing and same-session ordered completion (`docs/m5-2-design.md`, roadmap) | `Sessions.PostgresTwoInstancesFenceDispatchAndPreserveSessionOrdering`, `Sessions.PostgresStaleCompletionCannotReplaceContinuation` | Exact 8132de1 full PostgreSQL CTest passed on both events; dispatch/order repeat passed 3/3 in each, and concurrent idempotency passed 3/3. | **PASS** for deterministic multi-instance ordering/fencing coverage. |
+| Claim/run-binding crash boundaries, process owner/worker death, PostgreSQL claim interruption and recovery (design acceptance) | `Sessions.ClaimedTurnRecoversAfterInterruptionBeforeRunBinding`, `Sessions.QueuedRunRecoversAfterServiceRestartWithoutDuplicateRun`, `Sessions.PostgresClaimInterruptionIsRecoveredByAnotherInstance`, deterministic owner/worker death and session crash-boundary tests | All listed deterministic tests passed in exact 8132de1 pull-request CTest. Run insertion and turn binding are one atomic transaction, so an after-insert/before-bind committed half-state is impossible. | **PASS** for deterministic CI coverage. Older physical run-binding/pre-completion snapshots have no embedded tested SHA and remain historical. |
+| Close/submit/claim/completion/cancellation arbitration and continuation preservation (`docs/m5-2-design.md`) | `Storage.SessionCloseRacesInputAcceptanceTransactionally`, `Storage.SessionCloseRacesTurnClaimTransactionally`, `Sessions.CloseAfterProviderCallDoesNotAdvanceContinuation` | Exact 8132de1 pull-request CTest passed the SQLite/PostgreSQL close and continuation tests. The close fix cancels claimed pre-run work only when no run is bound; active-run cancellation and fencing remain covered. | **PASS** for deterministic races; no physical close/cancel fault injection was performed. |
+| Durable lifecycle journal, independent clients, SSE cursor reconnect and service restart (design acceptance) | `Api.SessionSseTwoClientsReplayExecutionAcrossRestart`, `Api.SessionSseResumesAfterCursorAndEndsAfterClose`, PostgreSQL cross-instance stream tests | Exact 8132de1 pull-request CTest passed; replay uses durable events and the documented cursor. | **PASS** for the core/API replay contract; this does not claim LASO-Web integration. |
+| Database test-resource collision handling and regression matrix | PostgreSQL fixtures use isolated schemas where supported. The PostgreSQL CTest configuration uses a database-wide `RESOURCE_LOCK` to serialize independent GoogleTest processes against the shared disposable DSN; the two LASO service instances within contention tests remain concurrent. | Both 8132de1 hosted workflows passed all eight jobs. Each PostgreSQL CTest run had 256 passed, 0 failed, 3 skipped; each dedicated contention step passed dispatch/order 3/3 and idempotency 3/3. Skips: two S3-disabled configuration tests and `distributed_m3_acceptance` without its opt-in DSN. The dedicated S3-enabled job passed. TSAN is not configured in the supported matrix. | **PASS** for the configured regression matrix and shared-resource protection; CTest does not claim independent PostgreSQL cases ran concurrently. |
+| Physical cross-host worker death and stale-worker fencing (PR acceptance record) | Retained private timelines show hard worker death after durable binding/provider start; stale completion rejected through the real fenced path while the replacement owner remained active, then replacement completion became authoritative. | Inherited evidence attributed by the prior run report to the 739 runtime candidate: latest worker-death block 1/1, 3/3 valid controlled worker-death runs in combined evidence; stale-worker run 1/1. Private snapshots/timelines are retained in the restricted recovery archive, but do not embed a binary SHA. Changes since the physical runtime candidate were limited to close handling and test harness/docs; worker-death and stale-fence execution paths were not changed. | **PASS, inherited with explicit provenance and scope**; no binary-SHA provenance is claimed. |
+| Other physical cross-host recovery cases from the documented M5.2 scope | Physical owner death, PostgreSQL outage/recovery, and continuation after physical service restart have no exact-candidate physical evidence. Older physical PostgreSQL interruption and run-binding/pre-completion snapshots lack a tested SHA. | Fresh owner-host preflight found an active backup workload, unrelated compute/storage/monitoring activity, and unavailable GPU telemetry. The other host was not preflighted, and no physical fault was injected. | **GAP / BLOCKED** for physical confirmation. Repeat only when both-host preflight supports a safe window; deterministic CI does not replace these documented physical gates. |
+
+
+The d5, 9c40e65, and 8132de1 CI summaries and failed logs are retained in a restricted private archive. No test resources or production services were changed. PR #14 remains Draft. M5.2 is **not acceptance-ready** because physical owner-death, PostgreSQL outage/recovery, and continuation-after-restart remain unvalidated for an exact candidate, and the physical host safety preflight did not permit fault injection.

@@ -47,6 +47,8 @@ coordination:
 storage_backend: sqlite
 api_host: 127.0.0.1
 api_port: 8080
+# Per-process maximum for durable session SSE streams (valid range: 1..128).
+max_session_sse_streams: 32
 workers: 2
 max_runs: 16
 max_pending_runs: 1024

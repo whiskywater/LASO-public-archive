@@ -32,6 +32,7 @@ struct Config {
   std::string artifact_backend = "filesystem";
   std::string artifact_s3_endpoint, artifact_s3_bucket, artifact_s3_region = "us-east-1",
                                                         artifact_s3_prefix = "laso";
+  std::filesystem::path artifact_s3_ca_file;
   std::string artifact_service_url, artifact_service_token;
   std::string execution_mode = "single";
   std::string coordination_mode = "single_owner";
@@ -40,9 +41,9 @@ struct Config {
   std::string api_host = "127.0.0.1", artifact_service_host = "127.0.0.1", log_level = "info",
               local_openai_endpoint;
   unsigned api_port = 8080, artifact_service_port = 0, workers = 2, max_runs = 16, max_nodes = 32,
-           max_nodes_per_run = 8, max_models = 4, max_tools = 8, max_subpipeline_depth = 16,
-           max_pending_scheduler_launches = 128, max_event_trigger_depth = 16,
-           max_event_trigger_deliveries = 1024, max_worker_jobs = 32,
+           max_session_sse_streams = 32, max_nodes_per_run = 8, max_models = 4, max_tools = 8,
+           max_subpipeline_depth = 16, max_pending_scheduler_launches = 128,
+           max_event_trigger_depth = 16, max_event_trigger_deliveries = 1024, max_worker_jobs = 32,
            max_worker_jobs_per_worker = 16, claim_batch_size = 8, max_pending_runs = 1024,
            artifact_s3_max_retries = 2;
   // Zero disables a budget. Token and cost budgets accumulate per run.

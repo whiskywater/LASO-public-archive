@@ -73,7 +73,9 @@ Credentials come from the AWS SDK's standard credential-provider chain (for
 example, a workload role or `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` in
 the process environment). LASO does not put credentials into YAML run state,
 logs, artifact metadata, or manifests. Remote endpoints use HTTPS with
-certificate verification enabled. Plain HTTP is rejected except when an
+certificate verification enabled. Set `artifact_s3_ca_file` to a PEM CA bundle
+when the endpoint uses a private trust root; certificate verification remains
+enabled. Plain HTTP is rejected except when an
 operator explicitly enables the test-only path for a loopback endpoint.
 Connection/request timeouts and SDK retries are bounded by configuration.
 

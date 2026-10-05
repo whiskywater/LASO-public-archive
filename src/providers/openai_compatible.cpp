@@ -120,6 +120,7 @@ ProviderMetadata LocalOpenAICompatibleProvider::metadata() const {
   result.name = "local-openai";
   result.version = "1";
   result.network = true;
+  result.continuation_mode = ContinuationMode::Stateless;
   result.capabilities = {"chat-completions", "structured-output"};
   return result;
 }

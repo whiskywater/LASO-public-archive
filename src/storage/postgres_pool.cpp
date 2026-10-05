@@ -1,8 +1,10 @@
 #include <cctype>
+#include <cerrno>
 #include <chrono>
 #include <condition_variable>
 #include <laso/storage/postgres_pool.hpp>
 #include <mutex>
+#include <poll.h>
 #include <set>
 #include <stdexcept>
 #include <version>
@@ -50,7 +52,31 @@ struct PostgresConnectionPool::Lease::State {
 namespace {
 std::unique_ptr<pqxx::connection>
 connect(const std::shared_ptr<PostgresConnectionPool::Lease::State> &state) {
-  auto connection = std::make_unique<pqxx::connection>(state->dsn);
+  const auto deadline = std::chrono::steady_clock::now() +
+                        std::chrono::milliseconds(state->options.acquisition_timeout_ms);
+  pqxx::connecting pending(state->dsn);
+  while (!pending.done()) {
+    const auto now = std::chrono::steady_clock::now();
+    if (now >= deadline)
+      throw Error(ErrorCode::Storage, "PostgreSQL connection timed out");
+    short events = 0;
+    if (pending.wait_to_read())
+      events |= POLLIN;
+    if (pending.wait_to_write())
+      events |= POLLOUT;
+    const auto remaining = std::chrono::ceil<std::chrono::milliseconds>(deadline - now).count();
+    pollfd socket{pending.sock(), events, 0};
+    const auto ready = ::poll(&socket, 1, static_cast<int>(remaining));
+    if (ready < 0) {
+      if (errno == EINTR)
+        continue;
+      throw Error(ErrorCode::Storage, "PostgreSQL connection wait failed");
+    }
+    if (ready == 0)
+      throw Error(ErrorCode::Storage, "PostgreSQL connection timed out");
+    pending.process();
+  }
+  auto connection = std::make_unique<pqxx::connection>(std::move(pending).produce());
   pqxx::work transaction(*connection);
   transaction.exec("CREATE SCHEMA IF NOT EXISTS " + quoted_schema(state->schema));
   transaction.exec("SET search_path TO " + quoted_schema(state->schema) + ", public");

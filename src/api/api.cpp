@@ -1,6 +1,7 @@
 #include <charconv>
 #include <laso/api/api.hpp>
 #include <laso/pipeline/parser.hpp>
+#include <limits>
 #include <regex>
 #include <set>
 
@@ -20,6 +21,7 @@ ApiResponse Api::handle(const std::string &method, const std::string &target,
       return {400, {{"error", "Request body must be a JSON object"}}};
     auto path = target;
     std::size_t limit = 50, offset = 0;
+    std::uint64_t after = 0;
     auto query = path.find('?');
     if (query != std::string::npos) {
       auto parameters = path.substr(query + 1);
@@ -32,7 +34,7 @@ ApiResponse Api::handle(const std::string &method, const std::string &target,
         if (equal == std::string::npos)
           throw Error(ErrorCode::Validation, "Malformed pagination query");
         auto key = part.substr(0, equal), value = part.substr(equal + 1);
-        std::size_t number = 0;
+        std::uint64_t number = 0;
         auto parsed = std::from_chars(value.data(), value.data() + value.size(), number);
         if (!seen.insert(key).second || parsed.ec != std::errc{} ||
             parsed.ptr != value.data() + value.size())
@@ -41,6 +43,9 @@ ApiResponse Api::handle(const std::string &method, const std::string &target,
           limit = number;
         else if (key == "offset" && number <= 100000000)
           offset = number;
+        else if (key == "after" &&
+                 number <= static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max()))
+          after = number;
         else
           throw Error(ErrorCode::Validation, "Pagination limit exceeded or unknown parameter");
         if (end == std::string::npos)
@@ -48,7 +53,7 @@ ApiResponse Api::handle(const std::string &method, const std::string &target,
         parameters.erase(0, end + 1);
       }
     }
-    auto response = route(method, path, input, actor, limit, offset);
+    auto response = route(method, path, input, actor, limit, offset, after);
     if (response.body.dump().size() > std::size_t{4} * 1024 * 1024)
       return {413, {{"error", "Response exceeds limit; request a smaller page"}}};
     return response;
@@ -73,11 +78,25 @@ ApiResponse Api::handle(const std::string &method, const std::string &target,
 }
 // NOLINTEND(bugprone-exception-escape)
 ApiResponse Api::route(const std::string &method, const std::string &target, const Json &body,
-                       const Actor &actor, std::size_t limit, std::size_t offset) {
+                       const Actor &actor, std::size_t limit, std::size_t offset,
+                       std::uint64_t after) {
+  static const std::regex session_stream_pattern(
+      "/api/v1/sessions/([A-Za-z0-9_.@-]{1,128})/events/stream");
+  std::smatch stream_match;
+  if (method == "GET" && std::regex_match(target, stream_match, session_stream_pattern)) {
+    (void)service_.agent_session(stream_match[1].str());
+    return {200, {{"status", "streaming"}}};
+  }
   if (method == "GET" && target == "/api/v1/health")
     return {200, {{"status", "ok"}, {"mode", "local-development"}}};
   if (method == "GET" && target == "/api/v1/version")
-    return {200, {{"version", version}, {"pipeline_schema", 1}, {"plugin_abi", 1}}};
+    return {200,
+            {{"version", version},
+             {"pipeline_schema", 1},
+             {"plugin_abi", 1},
+             {"capabilities",
+              {"sessions.durable", "sessions.ordered_turns", "sessions.sequential_execution",
+               "sessions.event_replay", "sessions.sse"}}}};
   if (method == "GET" && target == "/api/v1/providers")
     return {200, service_.providers()};
   if (method == "GET" && target == "/api/v1/tools")
@@ -89,13 +108,64 @@ ApiResponse Api::route(const std::string &method, const std::string &target, con
   std::smatch match;
   static const std::regex route_pattern("/api/v1/"
                                         "(pipelines|runs|approvals|worker-requests|schedules|"
-                                        "triggers|event-sources|workers|worker-jobs)(?:/"
+                                        "triggers|event-sources|workers|worker-jobs|sessions)(?:/"
                                         "([A-Za-z0-9_.@-]{1,128}))?(?:/"
                                         "(runs|cancel|resume|events|attempts|messages|approve|"
-                                        "reject|respond|answer|deny|enable|disable))?");
+                                        "reject|respond|answer|deny|enable|disable|turns|close))?");
   if (!std::regex_match(target, match, route_pattern))
     return {404, {{"error", "Endpoint not found"}}};
   auto collection = match[1].str(), id = match[2].str(), action = match[3].str();
+  if (collection == "sessions") {
+    auto public_turn = [](Json turn) {
+      turn.erase("dispatch_owner");
+      turn.erase("dispatch_fencing_token");
+      turn.erase("dispatch_expires_at");
+      turn.erase("dispatch_attempt");
+      return turn;
+    };
+    if (method == "POST" && id.empty()) {
+      const auto session = service_.create_session(body.at("pipeline_id").get<std::string>());
+      auto result = Json(session);
+      result.erase("next_sequence");
+      return {201, result};
+    }
+    if (method == "GET" && id.empty()) {
+      auto sessions = service_.list(RecordKind::AgentSession, "", limit, offset);
+      for (auto &session : sessions) {
+        session.erase("next_sequence");
+        session.erase("dispatch_generation");
+      }
+      return {200, sessions};
+    }
+    if (method == "GET" && !id.empty() && action.empty()) {
+      auto result = Json(service_.agent_session(id));
+      result.erase("next_sequence");
+      result.erase("dispatch_generation");
+      return {200, result};
+    }
+    if (method == "POST" && !id.empty() && action == "turns") {
+      if (!body.contains("idempotency_key") || !body.contains("input"))
+        return {400, {{"error", "Session turn requires idempotency_key and input"}}};
+      return {202, public_turn(service_.submit_session_turn(
+                       id, body.at("idempotency_key").get<std::string>(), body.at("input")))};
+    }
+    if (method == "GET" && !id.empty() && action == "turns") {
+      (void)service_.agent_session(id);
+      auto turns = service_.list(RecordKind::SessionTurn, id, limit, offset);
+      for (auto &turn : turns)
+        turn = public_turn(std::move(turn));
+      return {200, turns};
+    }
+    if (method == "GET" && !id.empty() && action == "events")
+      return {200, service_.session_events(id, after, limit)};
+    if (method == "POST" && !id.empty() && action == "close") {
+      service_.close_session(id);
+      auto result = Json(service_.agent_session(id));
+      result.erase("next_sequence");
+      return {202, result};
+    }
+    return {405, {{"error", "Method not supported"}}};
+  }
   if (collection == "event-sources") {
     if (method == "GET" && id.empty())
       return {200, service_.event_sources()};

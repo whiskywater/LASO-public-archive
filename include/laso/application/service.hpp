@@ -25,6 +25,13 @@ public:
   std::string start(const std::string &name_or_path, const Json &input = Json::object(),
                     const std::string &actor = "local", bool allow_file = false,
                     Json origin = Json::object(), Json message_metadata = Json::object());
+  AgentSession create_session(const std::string &pipeline_id);
+  AgentSession agent_session(const std::string &id) const;
+  void close_session(const std::string &id);
+  Json submit_session_turn(const std::string &id, const std::string &idempotency_key,
+                           const Json &input);
+  std::vector<Json> session_events(const std::string &id, std::uint64_t after,
+                                   std::size_t limit) const;
   Json create_schedule(const Json &spec);
   Json update_schedule(const std::string &id, const Json &spec);
   void set_schedule_enabled(const std::string &id, bool enabled);

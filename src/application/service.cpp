@@ -72,7 +72,8 @@ std::unique_ptr<ArtifactStore> make_artifact_store(const Config &config, Storage
                               config.artifact_s3_region, config.artifact_s3_prefix,
                               root / "scratch", config.artifact_s3_connect_timeout_ms,
                               config.artifact_s3_request_timeout_ms, config.artifact_s3_max_retries,
-                              config.artifact_s3_path_style, config.artifact_s3_allow_http},
+                              config.artifact_s3_path_style, config.artifact_s3_allow_http,
+                              config.artifact_s3_ca_file},
         storage, limits);
 #else
     throw Error(ErrorCode::Configuration,
@@ -353,6 +354,69 @@ std::string Service::start(const std::string &name_or_path, const Json &input,
         record.at("resolved_subpipelines").get<std::map<std::string, std::string>>();
   return runtime_.run(p, input, actor, "", "", 0, "", std::move(origin),
                       std::move(message_metadata));
+}
+
+AgentSession Service::create_session(const std::string &pipeline_id) {
+  (void)pipeline_record(pipeline_id);
+  AgentSession session;
+  session.pipeline_id = pipeline_id;
+  storage_->commit({{RecordKind::AgentSession, session.id, session.id, Json(session)}});
+  return session;
+}
+AgentSession Service::agent_session(const std::string &id) const {
+  return storage_->get(RecordKind::AgentSession, id).get<AgentSession>();
+}
+void Service::close_session(const std::string &id) {
+  Event event;
+  event.run_id = id;
+  event.type = "session.closed";
+  storage_->close_agent_session(id, Json(event));
+  const auto session = agent_session(id);
+  if (session.state == "closing" && !session.active_run_id.empty()) {
+    try {
+      runtime_.cancel(session.active_run_id);
+    } catch (const Error &error) {
+      if (error.code != ErrorCode::Conflict && error.code != ErrorCode::NotFound)
+        throw;
+      const auto current = agent_session(id);
+      if (current.state == "closing" && current.active_run_id == session.active_run_id)
+        throw;
+    }
+  }
+}
+Json Service::submit_session_turn(const std::string &id, const std::string &idempotency_key,
+                                  const Json &input) {
+  if (idempotency_key.empty() || idempotency_key.size() > 512 || input.dump().size() > 1024 * 1024)
+    throw Error(ErrorCode::Validation, "Invalid session input");
+  const auto session = agent_session(id);
+  std::uint64_t hash = 1469598103934665603ULL;
+  for (const auto byte : idempotency_key) {
+    hash ^= static_cast<unsigned char>(byte);
+    hash *= 1099511628211ULL;
+  }
+  std::ostringstream turn_id;
+  turn_id << id << "-turn-" << std::hex << hash;
+  Json turn{{"idempotency_key", idempotency_key},
+            {"input", input},
+            {"state", "queued"},
+            {"accepted_at", timestamp()},
+            {"pipeline_id", session.pipeline_id}};
+  Event event;
+  event.run_id = id;
+  event.type = "input.accepted";
+  storage_->submit_session_turn(id, turn_id.str(), turn, Json(event));
+  const auto accepted = storage_->get(RecordKind::SessionTurn, turn_id.str());
+  try {
+    runtime_.dispatch_session(id);
+  } catch (...) {
+    log_diagnostic("service.session_dispatch_deferred");
+  }
+  return accepted;
+}
+std::vector<Json> Service::session_events(const std::string &id, std::uint64_t after,
+                                          std::size_t limit) const {
+  (void)agent_session(id);
+  return storage_->session_events(id, after, limit);
 }
 
 Json Service::create_schedule(const Json &spec) {
@@ -772,6 +836,7 @@ Json Service::providers() const {
                       {"streaming", m.streaming},
                       {"context_size", m.context_size},
                       {"plugin", m.plugin},
+                      {"continuation_mode", continuation_mode_name(m.continuation_mode)},
                       {"healthy", p->health().healthy},
                       {"capabilities", m.capabilities}});
   }

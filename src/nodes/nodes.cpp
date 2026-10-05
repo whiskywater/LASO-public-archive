@@ -13,8 +13,33 @@ Task<NodeResult> FunctionNode::execute(ExecutionContext &c, const Message &input
 Task<NodeResult> AgentNode::execute(ExecutionContext &c, const Message &input) {
   auto permit = co_await limiter_.acquire(c);
   ModelRequest request{binding_.model, prompt_, input.payload, binding_.options};
+  const auto metadata = provider_->metadata();
+  if (!c.session_id.empty()) {
+    if (metadata.continuation_mode == ContinuationMode::Unsupported)
+      throw Error(ErrorCode::Provider, "Provider does not support session continuation");
+    if (metadata.continuation_mode == ContinuationMode::Opaque) {
+      if (!c.load_provider_continuation || !c.stage_provider_continuation)
+        throw Error(ErrorCode::Provider, "Session continuation context is unavailable");
+      request.continuation = c.load_provider_continuation(metadata.name);
+      if (request.continuation && (request.continuation->provider_id != metadata.name ||
+                                   request.continuation->provider_version != metadata.version))
+        throw Error(ErrorCode::Provider, "Stored provider continuation is incompatible");
+    }
+  }
   auto response = co_await provider_->generate(request, c);
   c.check();
+  if (!c.session_id.empty()) {
+    if (metadata.continuation_mode == ContinuationMode::Opaque) {
+      if (!response.continuation || response.continuation->state.empty() ||
+          response.continuation->state.size() > 64 * 1024 ||
+          response.continuation->provider_id != metadata.name ||
+          response.continuation->provider_version != metadata.version)
+        throw Error(ErrorCode::Provider, "Provider returned invalid continuation state");
+      c.stage_provider_continuation(std::move(*response.continuation));
+    } else if (response.continuation) {
+      throw Error(ErrorCode::Provider, "Stateless provider returned unexpected continuation state");
+    }
+  }
   auto message = input;
   message.payload = std::move(response.output);
   message.provenance.push_back({c.node_id, "", response.model, response.provider, "", input.id,
@@ -35,6 +60,9 @@ Task<NodeResult> ToolNode::execute(ExecutionContext &c, const Message &input) {
 }
 Task<NodeResult> WorkerNode::execute(ExecutionContext &c, const Message &input) {
   c.check();
+  if (!c.session_id.empty())
+    throw Error(ErrorCode::Provider,
+                "Worker adapter continuation is not supported for durable sessions");
   if (!manager_)
     throw Error(ErrorCode::Execution, "Worker manager is unavailable");
   WorkerRequest request;

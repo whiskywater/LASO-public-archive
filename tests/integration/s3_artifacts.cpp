@@ -53,6 +53,8 @@ std::optional<S3ArtifactStoreConfig> test_config(const std::filesystem::path &sc
   config.region = "us-east-1";
   config.prefix = "artifact-test/" + uuid();
   config.scratch_root = scratch;
+  if (const auto *ca_file = std::getenv("LASO_S3_TEST_CA_FILE"); ca_file && *ca_file != '\0')
+    config.ca_file = ca_file;
   config.path_style = true;
   config.allow_http = std::string_view(endpoint).starts_with("http://");
   config.connect_timeout_ms = 500;
@@ -77,18 +79,29 @@ void ensure_bucket(const S3ArtifactStoreConfig &config) {
   client_config.scheme = std::string_view(config.endpoint).starts_with("http://")
                              ? Aws::Http::Scheme::HTTP
                              : Aws::Http::Scheme::HTTPS;
+  client_config.verifySSL = true;
+  if (!config.ca_file.empty())
+    client_config.caFile = config.ca_file.string();
   client_config.connectTimeoutMs = static_cast<long>(config.connect_timeout_ms);
   client_config.requestTimeoutMs = static_cast<long>(config.request_timeout_ms);
   Aws::S3::S3Client client(client_config, Aws::Client::AWSAuthV4Signer::PayloadSigningPolicy::Never,
-                           config.path_style);
+                           !config.path_style);
   Aws::S3::Model::HeadBucketRequest head;
   head.SetBucket(config.bucket);
-  if (client.HeadBucket(head).IsSuccess())
+  const auto head_outcome = client.HeadBucket(head);
+  if (head_outcome.IsSuccess())
     return;
   Aws::S3::Model::CreateBucketRequest create;
   create.SetBucket(config.bucket);
-  if (!client.CreateBucket(create).IsSuccess())
-    throw std::runtime_error("Unable to initialize disposable S3 test bucket");
+  const auto create_outcome = client.CreateBucket(create);
+  if (!create_outcome.IsSuccess()) {
+    throw std::runtime_error(
+        "Unable to initialize disposable S3 test bucket (HeadBucket: " +
+        head_outcome.GetError().GetExceptionName() + ", HTTP " +
+        std::to_string(static_cast<int>(head_outcome.GetError().GetResponseCode())) +
+        "; CreateBucket: " + create_outcome.GetError().GetExceptionName() + ", HTTP " +
+        std::to_string(static_cast<int>(create_outcome.GetError().GetResponseCode())) + ")");
+  }
 }
 } // namespace
 
@@ -208,6 +221,21 @@ TEST(S3Artifacts, InvalidCredentialsFailClosedWithoutLeakingSecrets) {
   }
 }
 
+TEST(S3Artifacts, RejectsUntrustedTlsCertificate) {
+  TemporaryDirectory dir;
+  auto config = test_config(dir.path / "scratch");
+  if (!config)
+    GTEST_SKIP() << "S3 integration endpoint is not configured";
+  const auto *untrusted_ca = std::getenv("LASO_S3_TEST_UNTRUSTED_CA_FILE");
+  if (!untrusted_ca || *untrusted_ca == '\0')
+    GTEST_SKIP() << "Untrusted TLS test CA is not configured";
+  config->ca_file = untrusted_ca;
+  auto storage = make_storage(dir.path / "state.db");
+  S3ArtifactStore store(*config, *storage);
+  EXPECT_THROW((void)store.exists("sha256:" + std::string(64, '0')), Error);
+  EXPECT_TRUE(storage->list(RecordKind::Artifact).empty());
+}
+
 TEST(S3Artifacts, DetectsContentCorruptionAtPublishedObjectKey) {
   TemporaryDirectory dir;
   auto config = test_config(dir.path / "scratch");
@@ -223,11 +251,16 @@ TEST(S3Artifacts, DetectsContentCorruptionAtPublishedObjectKey) {
   Aws::S3::S3ClientConfiguration client_config;
   client_config.region = config->region;
   client_config.endpointOverride = config->endpoint;
-  client_config.scheme = Aws::Http::Scheme::HTTP;
+  client_config.scheme = std::string_view(config->endpoint).starts_with("http://")
+                             ? Aws::Http::Scheme::HTTP
+                             : Aws::Http::Scheme::HTTPS;
+  client_config.verifySSL = true;
+  if (!config->ca_file.empty())
+    client_config.caFile = config->ca_file.string();
   client_config.connectTimeoutMs = 500;
   client_config.requestTimeoutMs = 5000;
   Aws::S3::S3Client client(client_config, Aws::Client::AWSAuthV4Signer::PayloadSigningPolicy::Never,
-                           true);
+                           !config->path_style);
   const auto digest = artifact.sha256;
   Aws::S3::Model::PutObjectRequest request;
   request.SetBucket(config->bucket);

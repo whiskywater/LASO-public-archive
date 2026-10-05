@@ -9,6 +9,13 @@
 #include <vector>
 
 namespace laso {
+// Opaque provider state is held only by the runtime/session persistence path.
+// It intentionally has no JSON serialization overload.
+struct OpaqueProviderContinuation {
+  std::string provider_id;
+  std::string provider_version;
+  std::string state;
+};
 using Json = nlohmann::json;
 using Milliseconds = std::chrono::milliseconds;
 inline constexpr auto version = "0.1.0-rc.1";
@@ -154,9 +161,9 @@ struct Run {
   std::string id = uuid(), pipeline_id, definition, active_node = "input", created_at = timestamp(),
               updated_at = created_at, actor = "local", error, parent_id, parent_node_id,
               parent_message_id, child_id, child_pipeline_id, initiation_type = "manual",
-              schedule_id, schedule_occurrence_id, due_at, trigger_id, event_id, root_event_id,
-              owner_instance_id, lease_expires_at, claimed_at, last_renewed_at,
-              pending_parallel_group, pending_parallel_join;
+              session_id, session_turn_id, schedule_id, schedule_occurrence_id, due_at, trigger_id,
+              event_id, root_event_id, owner_instance_id, lease_expires_at, claimed_at,
+              last_renewed_at, pending_parallel_group, pending_parallel_join;
   unsigned pipeline_version = 1, child_pipeline_version = 0, subpipeline_depth = 0;
   unsigned trigger_depth = 0;
   std::uint64_t fencing_token = 0;
@@ -188,6 +195,8 @@ inline void to_json(Json &j, const Run &r) {
        {"parent_id", r.parent_id},
        {"parent_node_id", r.parent_node_id},
        {"parent_message_id", r.parent_message_id},
+       {"session_id", r.session_id},
+       {"session_turn_id", r.session_turn_id},
        {"child_id", r.child_id},
        {"child_pipeline_id", r.child_pipeline_id},
        {"child_pipeline_version", r.child_pipeline_version},
@@ -239,6 +248,8 @@ inline void from_json(const Json &j, Run &r) {
   j.at("parent_id").get_to(r.parent_id);
   r.parent_node_id = j.value("parent_node_id", std::string{});
   r.parent_message_id = j.value("parent_message_id", std::string{});
+  r.session_id = j.value("session_id", std::string{});
+  r.session_turn_id = j.value("session_turn_id", std::string{});
   j.at("child_id").get_to(r.child_id);
   r.child_pipeline_id = j.value("child_pipeline_id", std::string{});
   r.child_pipeline_version = j.value("child_pipeline_version", 0U);
@@ -442,6 +453,36 @@ struct Event {
   Json payload = Json::object();
   Json metadata = Json::object();
 };
+// Durable identity for a sequence of agent inputs. Provider state is kept out
+// of the public session record.
+struct AgentSession {
+  std::string id = uuid(), pipeline_id, state = "open", created_at = timestamp(),
+              updated_at = created_at, active_turn_id, active_run_id;
+  std::uint64_t dispatch_generation = 0;
+  std::uint64_t next_sequence = 1;
+};
+inline void to_json(Json &j, const AgentSession &s) {
+  j = {{"id", s.id},
+       {"pipeline_id", s.pipeline_id},
+       {"state", s.state},
+       {"created_at", s.created_at},
+       {"updated_at", s.updated_at},
+       {"next_sequence", s.next_sequence},
+       {"active_turn_id", s.active_turn_id},
+       {"active_run_id", s.active_run_id},
+       {"dispatch_generation", s.dispatch_generation}};
+}
+inline void from_json(const Json &j, AgentSession &s) {
+  s.id = j.value("id", uuid());
+  s.pipeline_id = j.value("pipeline_id", std::string{});
+  s.state = j.value("state", std::string{"open"});
+  s.created_at = j.value("created_at", timestamp());
+  s.updated_at = j.value("updated_at", s.created_at);
+  s.next_sequence = j.value("next_sequence", std::uint64_t{1});
+  s.active_turn_id = j.value("active_turn_id", std::string{});
+  s.active_run_id = j.value("active_run_id", std::string{});
+  s.dispatch_generation = j.value("dispatch_generation", std::uint64_t{0});
+}
 inline void to_json(Json &j, const Event &e) {
   j = {{"id", e.id},
        {"run_id", e.run_id},

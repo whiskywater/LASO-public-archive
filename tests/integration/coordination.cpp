@@ -1,8 +1,12 @@
 #include "../support.hpp"
+#include <arpa/inet.h>
 #include <atomic>
 #include <chrono>
 #include <laso/storage/coordination.hpp>
 #include <laso/storage/postgres_pool.hpp>
+#include <poll.h>
+#include <stdexcept>
+#include <sys/socket.h>
 #include <sys/wait.h>
 #include <thread>
 #include <unistd.h>
@@ -40,6 +44,71 @@ struct IsolatedPostgres {
     return options;
   }
 };
+
+class SilentPostgresEndpoint {
+public:
+  SilentPostgresEndpoint() {
+    listener_ = ::socket(AF_INET, SOCK_STREAM, 0);
+    if (listener_ < 0)
+      throw std::runtime_error("unable to create PostgreSQL probe socket");
+    sockaddr_in address{};
+    address.sin_family = AF_INET;
+    address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    address.sin_port = 0;
+    if (::bind(listener_, reinterpret_cast<sockaddr *>(&address), sizeof(address)) != 0 ||
+        ::listen(listener_, 1) != 0) {
+      ::close(listener_);
+      listener_ = -1;
+      throw std::runtime_error("unable to bind PostgreSQL probe socket");
+    }
+    socklen_t address_size = sizeof(address);
+    if (::getsockname(listener_, reinterpret_cast<sockaddr *>(&address), &address_size) != 0) {
+      ::close(listener_);
+      listener_ = -1;
+      throw std::runtime_error("unable to inspect PostgreSQL probe socket");
+    }
+    port_ = ntohs(address.sin_port);
+    listener_thread_ = std::thread([this] {
+      pollfd descriptor{listener_, POLLIN, 0};
+      while (!stopping_.load()) {
+        if (::poll(&descriptor, 1, 100) <= 0)
+          continue;
+        const auto client = ::accept(listener_, nullptr, nullptr);
+        if (client < 0)
+          continue;
+        accepted_.store(true);
+        while (!stopping_.load())
+          std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        ::close(client);
+        return;
+      }
+    });
+  }
+
+  ~SilentPostgresEndpoint() {
+    stopping_.store(true);
+    if (listener_thread_.joinable())
+      listener_thread_.join();
+    if (listener_ >= 0)
+      ::close(listener_);
+  }
+
+  std::string dsn() const {
+    return "host=127.0.0.1 port=" + std::to_string(port_) +
+           " dbname=laso_timeout_probe user=laso_probe connect_timeout=2";
+  }
+
+  bool accepted() const {
+    return accepted_.load();
+  }
+
+private:
+  int listener_ = -1;
+  unsigned short port_ = 0;
+  std::atomic<bool> stopping_{false};
+  std::atomic<bool> accepted_{false};
+  std::thread listener_thread_;
+};
 } // namespace
 
 #if defined(LASO_HAS_POSTGRES)
@@ -66,6 +135,17 @@ TEST(PostgresPool, ConnectionFailureIsBoundedAndRedacted) {
                                       "connect_timeout=1",
                                       "public", {1, 1, 50}),
                Error);
+}
+
+TEST(PostgresPool, ConnectionStartupIsBoundedWhenServerStallsAfterAccept) {
+  SilentPostgresEndpoint endpoint;
+  const auto started = std::chrono::steady_clock::now();
+  EXPECT_THROW(PostgresConnectionPool(endpoint.dsn(), "public", {1, 1, 100}), Error);
+  const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                           std::chrono::steady_clock::now() - started)
+                           .count();
+  EXPECT_TRUE(endpoint.accepted());
+  EXPECT_LT(elapsed, 750);
 }
 
 TEST(Coordination, InstanceIdentityIsOpaqueAndUnique) {
@@ -111,7 +191,15 @@ TEST(Coordination, SingleWinnerRenewReleaseAndInspection) {
   first->require_current(*owner);
   EXPECT_TRUE(first->release(*owner));
   EXPECT_FALSE(first->release(*owner));
-  EXPECT_FALSE(first->inspect("resource"));
+  const auto released = first->inspect("resource");
+  ASSERT_TRUE(released);
+  EXPECT_FALSE(released->active);
+  EXPECT_EQ(released->fencing_token, owner->fencing_token);
+  const auto next_owner = first->acquire("resource", 5000);
+  ASSERT_TRUE(next_owner);
+  EXPECT_EQ(next_owner->fencing_token, owner->fencing_token + 1);
+  EXPECT_THROW(first->require_current(*owner), Error);
+  EXPECT_NO_THROW(first->require_current(*next_owner));
 }
 
 TEST(Coordination, ExpiryTakeoverRejectsStaleFencingToken) {

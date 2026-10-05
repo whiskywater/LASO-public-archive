@@ -7,6 +7,7 @@ import argparse
 import http.client
 import math
 import socket
+import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -56,6 +57,8 @@ class ProxyHandler(BaseHTTPRequestHandler):
                 self.close_connection = True
                 return
 
+        controlled_upload = upload and content_length >= self.server.min_upload_bytes
+
         upstream = http.client.HTTPConnection(
             self.server.upstream_host,
             self.server.upstream_port,
@@ -76,8 +79,10 @@ class ProxyHandler(BaseHTTPRequestHandler):
             upstream.endheaders()
 
             if upload:
-                self._mark(self.server.started_marker)
+                if controlled_upload:
+                    self._mark(self.server.started_marker)
                 remaining = content_length
+                transferred = 0
                 while remaining:
                     assert upload_deadline is not None
                     self.connection.settimeout(self._remaining(upload_deadline))
@@ -89,7 +94,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
                         upstream.close()
                         self.close_connection = True
                         return
-                    if self.server.rate_bps:
+                    if controlled_upload and self.server.rate_bps:
                         delay = len(chunk) / self.server.rate_bps
                         if delay >= self._remaining(upload_deadline):
                             raise socket.timeout(
@@ -104,6 +109,9 @@ class ProxyHandler(BaseHTTPRequestHandler):
                     upstream.send(chunk)
                     self._remaining(upload_deadline)
                     remaining -= len(chunk)
+                    transferred += len(chunk)
+                    if controlled_upload:
+                        self.server._write_progress(transferred)
 
             if upload_deadline is not None:
                 time_left = self._remaining(upload_deadline)
@@ -116,7 +124,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
             if upload_deadline is not None:
                 self._remaining(upload_deadline)
 
-            if upload and response.status == 200 and self.server.published_marker:
+            if controlled_upload and response.status == 200 and self.server.published_marker:
                 self._mark(self.server.published_marker)
                 if self.server.release_file:
                     barrier_deadline = time.monotonic() + self.server.hold_timeout
@@ -188,10 +196,23 @@ class ArtifactChaosProxy(ThreadingHTTPServer):
         self.started_marker = args.started_marker
         self.published_marker = args.published_marker
         self.release_file = args.release_file
+        self.progress_marker = args.progress_marker
         self.rate_bps = args.rate_bps
+        self.min_upload_bytes = args.min_upload_bytes
         self.hold_timeout = args.hold_timeout
         self.max_upload_bytes = args.max_upload_bytes
         self.upload_timeout = args.upload_timeout
+        self.progress_lock = threading.Lock()
+
+    def _write_progress(self, transferred: int) -> None:
+        if not self.progress_marker:
+            return
+        path = Path(self.progress_marker)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_name(f"{path.name}.{threading.get_ident()}.tmp")
+        with self.progress_lock:
+            temporary.write_text(f"{transferred}\n", encoding="ascii")
+            temporary.replace(path)
 
 
 def main() -> None:
@@ -200,15 +221,18 @@ def main() -> None:
     parser.add_argument("--upstream-host", default="127.0.0.1")
     parser.add_argument("--upstream-port", type=int, required=True)
     parser.add_argument("--started-marker")
+    parser.add_argument("--progress-marker")
     parser.add_argument("--published-marker")
     parser.add_argument("--release-file")
     parser.add_argument("--rate-bps", type=int, default=0)
+    parser.add_argument("--min-upload-bytes", type=int, default=0)
     parser.add_argument("--hold-timeout", type=float, default=600)
     parser.add_argument("--max-upload-bytes", type=int, default=256 * 1024 * 1024)
     parser.add_argument("--upload-timeout", type=float, default=300)
     args = parser.parse_args()
     if (
         args.rate_bps < 0
+        or args.min_upload_bytes < 0
         or not math.isfinite(args.hold_timeout)
         or args.hold_timeout <= 0
         or args.max_upload_bytes <= 0

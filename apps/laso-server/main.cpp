@@ -32,8 +32,9 @@ int main(int argc, char **argv) {
     laso::Service service(executor.context(), config);
     laso::LocalDevelopmentIdentity identity;
     laso::Api api(service, identity);
-    laso::HttpServer server(executor.context(), api, config.api_host,
-                            static_cast<unsigned short>(config.api_port));
+    laso::HttpServer server(
+        executor.context(), api, config.api_host, static_cast<unsigned short>(config.api_port),
+        laso::HttpServerOptions{.max_session_streams = config.max_session_sse_streams});
     std::unique_ptr<laso::ArtifactHttpServer> artifact_server;
     if (config.artifact_service_port != 0) {
       artifact_server = std::make_unique<laso::ArtifactHttpServer>(

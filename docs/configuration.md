@@ -20,6 +20,7 @@ credentials and binds the development API to loopback.
 | `artifact_s3_bucket` | empty | Required bucket when `artifact_backend: s3` is selected. LASO does not create buckets. |
 | `artifact_s3_region` | `us-east-1` | Signing region used by the S3 client. |
 | `artifact_s3_prefix` | `laso` | Dedicated key namespace prefix; raw workspace paths are never used as keys. |
+| `artifact_s3_ca_file` | empty | Optional PEM CA bundle for S3 HTTPS endpoints using a private trust root. TLS certificate verification remains enabled. |
 | `artifact_s3_path_style` | `false` | Use path-style requests where required by an S3-compatible service. |
 | `artifact_s3_allow_http` | `false` | Explicit loopback-only exception for isolated local testing; production endpoints must use verified HTTPS. |
 | `artifact_s3_connect_timeout_ms` | `3000` | Bounded connection timeout. |
@@ -40,6 +41,7 @@ credentials and binds the development API to loopback.
 | `postgres_pool_min_connections` | `1` | Minimum PostgreSQL pool size. |
 | `postgres_pool_max_connections` | `4` | Maximum PostgreSQL pool size. |
 | `postgres_pool_acquisition_timeout_ms` | `1000` | Bounded pool acquisition wait. |
+| `max_session_sse_streams` | `32` | Maximum session event streams per LASO process (1–128). Admission is immediate; excess streams receive HTTP 429 and `Retry-After: 1`. See [session SSE](session-sse.md) for replay and reconnect behavior. |
 
 SQLite is deliberately single-instance. Do not run multiple LASO processes
 against the same SQLite state. PostgreSQL multi-instance mode uses database

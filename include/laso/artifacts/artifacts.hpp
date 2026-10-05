@@ -116,6 +116,7 @@ struct S3ArtifactStoreConfig {
   std::uint64_t connect_timeout_ms = 3000, request_timeout_ms = 30000;
   unsigned max_retries = 2;
   bool path_style = false, allow_http = false;
+  std::filesystem::path ca_file;
 };
 
 // Uses the AWS SDK credential provider chain and a controlled content-hash key

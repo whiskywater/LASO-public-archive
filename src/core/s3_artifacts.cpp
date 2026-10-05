@@ -130,6 +130,9 @@ struct S3ArtifactStore::Impl {
         config.connect_timeout_ms > 120000 || config.request_timeout_ms == 0 ||
         config.request_timeout_ms > 600000 || config.max_retries > 5)
       throw Error(ErrorCode::Configuration, "Invalid S3 artifact store settings");
+    if (!config.ca_file.empty() && (!std::filesystem::is_regular_file(config.ca_file) ||
+                                    !std::ifstream(config.ca_file).good()))
+      throw Error(ErrorCode::Configuration, "S3 CA bundle must be a readable regular file");
     if (config.prefix.front() == '/' || config.prefix.back() == '/' ||
         config.prefix.find("..") != std::string::npos ||
         config.prefix.find("//") != std::string::npos ||
@@ -201,6 +204,8 @@ struct S3ArtifactStore::Impl {
     client_config.scheme =
         config.endpoint.starts_with("http://") ? Aws::Http::Scheme::HTTP : Aws::Http::Scheme::HTTPS;
     client_config.verifySSL = true;
+    if (!config.ca_file.empty())
+      client_config.caFile = config.ca_file.string();
     client_config.connectTimeoutMs = static_cast<long>(config.connect_timeout_ms);
     client_config.requestTimeoutMs = static_cast<long>(config.request_timeout_ms);
     client_config.retryStrategy = Aws::MakeShared<Aws::Client::DefaultRetryStrategy>(

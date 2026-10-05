@@ -20,6 +20,10 @@ struct ExecutionContext {
   // NodeWork persistence.
   std::string distributed_work_id, distributed_attempt_id;
   std::function<void(const std::string &)> worker_job_started;
+  std::string session_id;
+  std::function<std::optional<OpaqueProviderContinuation>(const std::string &)>
+      load_provider_continuation;
+  std::function<void(OpaqueProviderContinuation)> stage_provider_continuation;
   void check() const;
   Task<void> delay(Milliseconds duration) const;
 };

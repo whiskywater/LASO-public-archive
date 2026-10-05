@@ -17,9 +17,25 @@
   Uploads and downloads stream through bounded temporary files with hash/size
   verification, immutable conditional publication, bounded request behavior,
   and AWS SDK credential-chain integration. Remote S3 garbage collection is
-  intentionally unsupported. The backend implementation and focused service
-  tests are present, but distributed S3 acceptance and S3-specific chaos
-  validation remain in progress; this is not an M4.1 validation claim.
+  intentionally unsupported. Physical owner/worker acceptance, fault recovery,
+  stale-result fencing, and trusted/untrusted TLS validation have passed using
+  disposable infrastructure. M4.1 merged after physical acceptance and green hosted CI; see
+  `VALIDATION.md` for the sanitized evidence.
+
+- Added durable agent session identity, idempotent ordered input acceptance,
+  close semantics, event replay, and resumable SSE for SQLite and PostgreSQL.
+  PostgreSQL supports cross-instance event observation; SQLite remains
+  single-instance. Inputs remain journaled rather than executed until M5.2.
+  Acceptance covers concurrent ordering, idempotent conflict behavior, service
+  restart, close races, cursor resume, and final close-event delivery; see
+  `VALIDATION.md` for the evidence.
+
+- Preserve expired PostgreSQL lease rows so fencing tokens remain monotonic, and
+  mark a superseded running node attempt failed in the same fenced transaction
+  that claims its replacement. Bound PostgreSQL connection startup with the
+  configured pool acquisition deadline, including when a server accepts TCP but
+  stalls during protocol startup. Regression tests cover token takeover,
+  interrupted attempt history, and stalled startup.
 
 - Added durable content-addressed artifact transport for distributed workspaces
   and returned results. Files stream through atomic filesystem objects, can be

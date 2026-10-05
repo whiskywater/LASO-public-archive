@@ -150,7 +150,7 @@ curl -fsS -X POST http://127.0.0.1:8080/api/v1/pipelines/hello@1/runs \
 Development identity is unauthenticated and bound to `127.0.0.1:8080`. Remote
 binding requires deliberate `allow_remote_api` configuration and deployment-owned
 authentication. The API never accepts filesystem paths for pipeline registration.
-[API and CLI reference](docs/access.md) lists all endpoints and commands.
+[API and CLI reference](docs/access.md) lists all endpoints and commands. The [session SSE contract](docs/session-sse.md) documents stream admission, `Retry-After`, heartbeat, and replay behavior.
 
 ## Native plugins
 
@@ -226,6 +226,7 @@ not download or launch models.
 ## Development and deployment
 
 See [architecture](docs/architecture.md), [runtime semantics](docs/runtime.md),
+[persistent session primitives](docs/sessions.md), [session SSE admission and replay](docs/session-sse.md),
 [pipeline composition](docs/pipelines.md),
 [storage backends](docs/storage.md),
 [scheduling and event triggers](docs/scheduling.md),

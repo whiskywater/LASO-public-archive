@@ -7,7 +7,7 @@ an arbitrary request-body actor. Local development identity is unauthenticated.
 
 | Method | Path |
 |---|---|
-| GET | `/health`, `/version` |
+| GET | `/health`, `/version` (`capabilities` advertises implemented API behavior) |
 | GET, POST | `/pipelines` |
 | GET | `/pipelines/{id}` |
 | POST | `/pipelines/{id}/runs` |
@@ -24,6 +24,9 @@ an arbitrary request-body actor. Local development identity is unauthenticated.
 | POST | `/worker-jobs/{id}/cancel` |
 | GET | `/worker-requests`, `/worker-requests/{id}` |
 | POST | `/worker-requests/{id}/respond`, `/worker-requests/{id}/answer`, `/worker-requests/{id}/deny`, `/worker-requests/{id}/cancel` |
+| GET, POST | `/sessions` |
+| GET | `/sessions/{id}`, `/sessions/{id}/turns`, `/sessions/{id}/events`, `/sessions/{id}/events/stream` |
+| POST | `/sessions/{id}/turns`, `/sessions/{id}/close` |
 
 All paths above are relative to `/api/v1`. Creation/decisions return 201/202; callers
 inspect run state separately. Errors use 400 (validation), 403 (policy), 404, 409

@@ -1,11 +1,34 @@
 #include "../support.hpp"
+#include <cstdlib>
 #include <fstream>
 #include <laso/policies/policy.hpp>
 #include <laso_plugin.h>
+#include <optional>
 #include <type_traits>
 
 using namespace laso;
 using namespace laso::test;
+namespace {
+class ScopedEnvironment {
+public:
+  ScopedEnvironment(std::string name, std::string value) : name_(std::move(name)) {
+    if (const auto *previous = std::getenv(name_.c_str()))
+      previous_ = previous;
+    if (setenv(name_.c_str(), value.c_str(), 1) != 0)
+      throw std::runtime_error("Unable to set test environment");
+  }
+  ~ScopedEnvironment() {
+    if (previous_)
+      setenv(name_.c_str(), previous_->c_str(), 1);
+    else
+      unsetenv(name_.c_str());
+  }
+
+private:
+  std::string name_;
+  std::optional<std::string> previous_;
+};
+} // namespace
 static_assert(std::is_constructible_v<SQLiteStorage, const std::filesystem::path &>);
 TEST(Pipeline, ParsesTypedDefinition) {
   auto p = parse_pipeline(fixture("hello-pipeline"));
@@ -136,19 +159,32 @@ TEST(Configuration, ParsesAuthenticatedArtifactGatewaySettings) {
 TEST(Configuration, S3ArtifactBackendIsOptionalAndExplicit) {
   TemporaryDirectory dir;
   const auto path = dir.path / "laso.yaml";
+  const auto ca_file = dir.path / "test-ca.pem";
+  const auto environment_ca_file = dir.path / "environment-ca.pem";
+  std::ofstream(ca_file) << "synthetic CA bundle";
+  std::ofstream(environment_ca_file) << "synthetic environment CA bundle";
   std::ofstream(path) << "artifact_backend: s3\n"
                          "artifact_s3_endpoint: http://127.0.0.1:9000\n"
                          "artifact_s3_bucket: laso-test-bucket\n"
-                         "artifact_s3_prefix: artifact-test\n"
-                         "artifact_s3_path_style: true\n"
-                         "artifact_s3_allow_http: true\n";
+                         "artifact_s3_ca_file: " +
+                             ca_file.string() +
+                             "\n"
+                             "artifact_s3_prefix: artifact-test\n"
+                             "artifact_s3_path_style: true\n"
+                             "artifact_s3_allow_http: true\n";
 #ifdef LASO_HAS_S3
   const auto config = load_config(path);
   EXPECT_EQ(config.artifact_backend, "s3");
   EXPECT_EQ(config.artifact_s3_bucket, "laso-test-bucket");
+  EXPECT_EQ(config.artifact_s3_ca_file, ca_file);
   EXPECT_EQ(config.artifact_s3_prefix, "artifact-test");
   EXPECT_TRUE(config.artifact_s3_path_style);
   EXPECT_TRUE(config.artifact_s3_allow_http);
+  {
+    ScopedEnvironment ca_environment("LASO_ARTIFACT_S3_CA_FILE", environment_ca_file.string());
+    const auto environment_config = load_config(path);
+    EXPECT_EQ(environment_config.artifact_s3_ca_file, environment_ca_file);
+  }
 #else
   EXPECT_THROW(load_config(path), Error);
 #endif
@@ -164,6 +200,18 @@ TEST(Configuration, RejectsS3NamespaceEscapeAndUntrustedPlainHttp) {
   config.artifact_s3_endpoint = "http://object-store.invalid:9000";
   config.artifact_s3_allow_http = true;
   EXPECT_THROW(config.validate(), Error);
+#else
+  GTEST_SKIP() << "S3 configuration validation is available only in an S3 build";
+#endif
+}
+TEST(Configuration, S3OwnerCanExposeAuthenticatedArtifactGateway) {
+#ifdef LASO_HAS_S3
+  Config config;
+  config.artifact_backend = "s3";
+  config.artifact_s3_bucket = "laso-test-bucket";
+  config.artifact_service_port = 9090;
+  config.artifact_service_token = "synthetic-artifact-token";
+  EXPECT_NO_THROW(config.validate());
 #else
   GTEST_SKIP() << "S3 configuration validation is available only in an S3 build";
 #endif
@@ -303,6 +351,16 @@ TEST(Configuration, RejectsZeroConcurrency) {
   Config c;
   c.max_runs = 0;
   EXPECT_THROW(c.validate(), Error);
+}
+TEST(Configuration, BoundsSessionSseStreamCapacity) {
+  Config c;
+  EXPECT_NO_THROW(c.validate());
+  c.max_session_sse_streams = 0;
+  EXPECT_THROW(c.validate(), Error);
+  c.max_session_sse_streams = 129;
+  EXPECT_THROW(c.validate(), Error);
+  c.max_session_sse_streams = 128;
+  EXPECT_NO_THROW(c.validate());
 }
 TEST(Configuration, ValidatesPerRunNodeLimit) {
   Config c;

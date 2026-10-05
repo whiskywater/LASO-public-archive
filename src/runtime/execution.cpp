@@ -4,6 +4,20 @@
 
 namespace laso {
 namespace {
+struct SessionContinuationCandidates {
+  std::mutex mutex;
+  std::map<std::string, OpaqueProviderContinuation> by_provider;
+};
+
+std::string session_continuation_id(const std::string &session_id, const std::string &provider_id) {
+  return "current:" + std::to_string(session_id.size()) + ":" + session_id + ":" + provider_id;
+}
+
+std::string run_continuation_candidate_id(const std::string &run_id,
+                                          const std::string &provider_id) {
+  return "candidate:" + std::to_string(run_id.size()) + ":" + run_id + ":" + provider_id;
+}
+
 Json object_workspace_manifest(const Json &manifest, ArtifactStore &store,
                                const std::string &run_id, const std::string &node_id) {
   if (manifest.value("version", 1U) != 1U)
@@ -128,7 +142,7 @@ Task<void> Runtime::execute_branch(const PipelineDefinition &pipeline, Execution
                                    std::chrono::steady_clock::time_point pipeline_deadline,
                                    unsigned subpipeline_depth,
                                    std::optional<LeaseRecord> work_lease, std::string work_id,
-                                   std::string work_attempt_id) {
+                                   std::string work_attempt_id, std::string session_id) {
   auto persist = [&](const std::vector<Record> &records) {
     if (work_lease) {
       NodeWork work;
@@ -149,6 +163,7 @@ Task<void> Runtime::execute_branch(const PipelineDefinition &pipeline, Execution
     branch.frames = std::move(token.frames);
     branch.actor = "parallel";
     branch.subpipeline_depth = subpipeline_depth;
+    branch.session_id = std::move(session_id);
     for (;;) {
       const auto &definition = pipeline.nodes.at(branch.active_node);
       if (definition.type == "join") {
@@ -169,6 +184,7 @@ Task<void> Runtime::execute_branch(const PipelineDefinition &pipeline, Execution
       }
       ExecutionContext context{branch.id, branch.pipeline_id, definition.id,
                                state->stop.get_token(), pipeline_deadline};
+      context.session_id = branch.session_id;
       context.distributed_work_id = work_id;
       context.distributed_attempt_id = work_attempt_id;
       context.check();
@@ -367,7 +383,8 @@ Task<void> Runtime::execute_distributed_work(NodeWork work, LeaseRecord work_lea
     }
     co_await execute_branch(pipeline, std::move(token), branch_state, run_nodes,
                             std::chrono::steady_clock::now() + pipeline.timeout.timeout,
-                            run.subpipeline_depth, work_lease, work.id, work.attempt_id);
+                            run.subpipeline_depth, work_lease, work.id, work.attempt_id,
+                            run.session_id);
     NodeWork completed = deps_.storage.get(RecordKind::NodeWork, work.id).get<NodeWork>();
     const auto current_run = deps_.storage.get(RecordKind::Run, work.run_id).get<Run>();
     if (current_run.cancellation_requested || terminal(current_run.state)) {
@@ -509,7 +526,7 @@ Task<bool> Runtime::execute_parallel(Run &run, const PipelineDefinition &pipelin
   for (auto &token : tokens)
     asio::co_spawn(io_,
                    execute_branch(pipeline, std::move(token), state, run_nodes, pipeline_deadline,
-                                  subpipeline_depth),
+                                  subpipeline_depth, std::nullopt, {}, {}, run.session_id),
                    asio::detached);
   while (true) {
     {
@@ -544,10 +561,19 @@ Task<void> Runtime::execute(Run r, std::stop_token stop) {
   pipeline.resolved_subpipelines = r.resolved_subpipelines;
   const auto deadline = std::chrono::steady_clock::now() + pipeline.timeout.timeout;
   auto run_nodes = std::make_shared<AsyncLimiter>(config_.max_nodes_per_run);
+  auto continuation_candidates = std::make_shared<SessionContinuationCandidates>();
   bool attempt_recorded = false;
   try {
     {
       std::lock_guard lock(mutex_);
+      const auto current = deps_.storage.get(RecordKind::Run, r.id).get<Run>();
+      if (terminal(current.state))
+        co_return;
+      r = current;
+      if (r.cancellation_requested) {
+        transition(r, RunState::Cancelled, "run.cancelled");
+        co_return;
+      }
       transition(r, RunState::Starting, "run.starting");
       transition(r, RunState::Running, "run.started");
       reconcile_distributed_parallel(r, pipeline);
@@ -555,6 +581,49 @@ Task<void> Runtime::execute(Run r, std::stop_token stop) {
     while (true) {
       attempt_recorded = false;
       ExecutionContext context{r.id, r.pipeline_id, r.active_node, stop, deadline};
+      if (!r.session_id.empty()) {
+        context.session_id = r.session_id;
+        const auto session_id = r.session_id;
+        const auto run_id = r.id;
+        context.load_provider_continuation =
+            [this, session_id,
+             run_id](const std::string &provider_id) -> std::optional<OpaqueProviderContinuation> {
+          const auto read =
+              [this, &session_id, &provider_id](
+                  const std::string &id,
+                  const std::string &scope) -> std::optional<OpaqueProviderContinuation> {
+            try {
+              const auto value = deps_.storage.get(RecordKind::SessionContinuation, id);
+              if (value.value("scope", std::string{}) != scope ||
+                  value.value("session_id", std::string{}) != session_id ||
+                  value.value("provider_id", std::string{}) != provider_id)
+                throw Error(ErrorCode::Storage, "Stored provider continuation is invalid");
+              const auto state = value.value("state", std::string{});
+              if (state.empty() || state.size() > 64 * 1024)
+                throw Error(ErrorCode::Storage, "Stored provider continuation is invalid");
+              return OpaqueProviderContinuation{
+                  provider_id, value.value("provider_version", std::string{}), state};
+            } catch (const Error &error) {
+              if (error.code == ErrorCode::NotFound)
+                return std::nullopt;
+              throw;
+            }
+          };
+          if (auto candidate =
+                  read(run_continuation_candidate_id(run_id, provider_id), "candidate"))
+            return candidate;
+          return read(session_continuation_id(session_id, provider_id), "current");
+        };
+        context.stage_provider_continuation = [continuation_candidates](
+                                                  OpaqueProviderContinuation continuation) {
+          if (continuation.provider_id.empty() || continuation.provider_id.size() > 256 ||
+              continuation.provider_version.empty() || continuation.provider_version.size() > 128 ||
+              continuation.state.empty() || continuation.state.size() > 64 * 1024)
+            throw Error(ErrorCode::Provider, "Provider returned invalid continuation state");
+          std::lock_guard lock(continuation_candidates->mutex);
+          continuation_candidates->by_provider[continuation.provider_id] = std::move(continuation);
+        };
+      }
       context.check();
       const auto &definition = pipeline.nodes.at(r.active_node);
       r.provider.clear();
@@ -794,6 +863,22 @@ Task<void> Runtime::execute(Run r, std::stop_token stop) {
                                      r.message.provenance.end() - 256);
         std::vector<Record> records{{RecordKind::Attempt, attempt.id, r.id, Json(attempt)},
                                     {RecordKind::Message, r.message.id, r.id, Json(r.message)}};
+        if (!r.session_id.empty() && definition.type == "agent") {
+          std::lock_guard lock(continuation_candidates->mutex);
+          for (const auto &[provider_id, continuation] : continuation_candidates->by_provider) {
+            Json candidate{{"scope", "candidate"},
+                           {"session_id", r.session_id},
+                           {"run_id", r.id},
+                           {"turn_id", r.session_turn_id},
+                           {"provider_id", provider_id},
+                           {"provider_version", continuation.provider_version},
+                           {"state", continuation.state}};
+            records.push_back({RecordKind::SessionContinuation,
+                               run_continuation_candidate_id(r.id, provider_id), r.id,
+                               std::move(candidate)});
+          }
+          continuation_candidates->by_provider.clear();
+        }
         if (definition.type == "subpipeline")
           r.child_id.clear();
         bool continuing = false;
@@ -832,6 +917,10 @@ Task<void> Runtime::execute(Run r, std::stop_token stop) {
           transition(r, RunState::Completed, "run.completed", std::move(records));
           co_return;
         }
+#ifdef LASO_ENABLE_SESSION_TEST_HOOKS
+        if (!r.session_id.empty())
+          session_test_point(SessionTestPoint::BeforeNodeCheckpointCommit);
+#endif
         checkpoint(r, "node.completed", std::move(records));
         completed = true;
         break;

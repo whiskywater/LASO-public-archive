@@ -26,6 +26,7 @@ option(LASO_ENABLE_S3 "Build the optional S3-compatible artifact backend" OFF)
 option(LASO_BUILD_OPENCODE_ADAPTER "Build the optional OpenCode worker adapter" OFF)
 option(LASO_BUILD_CODEX_ADAPTER "Build the optional Codex worker adapter" OFF)
 option(LASO_BUILD_CLAUDE_ADAPTER "Build the optional Claude Code worker adapter" OFF)
+option(LASO_ENABLE_SESSION_TEST_HOOKS "Compile deterministic session recovery test hooks" OFF)
 if(LASO_ENABLE_TSAN AND (LASO_ENABLE_ASAN OR LASO_ENABLE_UBSAN))
   message(FATAL_ERROR "Use TSan in a separate build")
 endif()
@@ -120,6 +121,12 @@ target_link_libraries(laso_plugin_loader PUBLIC laso_core PRIVATE ${CMAKE_DL_LIB
 add_library(laso_runtime src/runtime/executor.cpp src/nodes/nodes.cpp src/runtime/runtime.cpp src/runtime/graph.cpp src/runtime/execution.cpp src/runtime/workspace.cpp src/scheduler/scheduler.cpp)
 laso_target(laso_runtime)
 target_link_libraries(laso_runtime PUBLIC laso_core laso_storage)
+if(LASO_ENABLE_SESSION_TEST_HOOKS)
+  if(NOT BUILD_TESTING)
+    message(FATAL_ERROR "Session test hooks require BUILD_TESTING=ON")
+  endif()
+  target_compile_definitions(laso_runtime PUBLIC LASO_ENABLE_SESSION_TEST_HOOKS=1)
+endif()
 add_library(laso_application src/application/service.cpp src/application/event_ingress.cpp src/workers/manager.cpp src/workers/process_transport.cpp)
 laso_target(laso_application)
 target_link_libraries(laso_application PUBLIC laso_runtime laso_storage laso_plugin_loader)
@@ -288,13 +295,26 @@ if(BUILD_TESTING)
     add_dependencies(laso_tests laso-distributed-process)
   endif()
   include(GoogleTest)
-  gtest_discover_tests(laso_tests DISCOVERY_TIMEOUT 60)
+  if(LASO_ENABLE_POSTGRES)
+    # The integration DSN is protected by a database-wide single-owner lease.
+    # Keep independent CTest processes out of that shared fixture while leaving
+    # concurrency inside each multi-instance acceptance test unchanged. Bound a
+    # stuck GoogleTest case so it reports diagnostics instead of occupying CI
+    # for the runner's long default timeout.
+    gtest_discover_tests(laso_tests DISCOVERY_TIMEOUT 60
+                         PROPERTIES RESOURCE_LOCK laso_postgres_test_database
+                                    TIMEOUT 120)
+  else()
+    gtest_discover_tests(laso_tests DISCOVERY_TIMEOUT 60)
+  endif()
   add_test(NAME cli_validate COMMAND laso pipeline validate ${PROJECT_SOURCE_DIR}/examples/hello-pipeline/pipeline.yaml)
   add_test(NAME process_smoke COMMAND bash ${PROJECT_SOURCE_DIR}/tests/integration/process-smoke.sh ${CMAKE_BINARY_DIR} ${PROJECT_SOURCE_DIR})
   set_tests_properties(process_smoke PROPERTIES TIMEOUT 60 SKIP_RETURN_CODE 77)
   if(LASO_ENABLE_POSTGRES)
     add_test(NAME distributed_m3_acceptance
              COMMAND bash ${PROJECT_SOURCE_DIR}/tests/acceptance/distributed-m3.sh ${CMAKE_BINARY_DIR} ${PROJECT_SOURCE_DIR})
-    set_tests_properties(distributed_m3_acceptance PROPERTIES TIMEOUT 600 SKIP_RETURN_CODE 77)
+    set_tests_properties(distributed_m3_acceptance PROPERTIES
+                         TIMEOUT 600 SKIP_RETURN_CODE 77
+                         RESOURCE_LOCK laso_postgres_test_database)
   endif()
 endif()
