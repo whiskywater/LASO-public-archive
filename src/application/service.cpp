@@ -124,8 +124,8 @@ Service::Service(asio::io_context &io, Config config)
           }),
       artifacts_(make_artifact_store(config_, *storage_)),
       runtime_(io, config_,
-               {*storage_, events_, providers_, tools_, functions_, nodes_, policy_, schemas_,
-                worker_manager_,
+               {*storage_, events_, providers_, context_reducers_, tools_, functions_, nodes_,
+                policy_, schemas_, worker_manager_,
                 [this](const std::string &reference) { return resolve_pipeline(reference); },
                 coordination_.get(), artifacts_.get(), instance_id_,
                 config_.data_dir / "distributed-workspaces"}),
@@ -146,6 +146,7 @@ Service::Service(asio::io_context &io, Config config)
           std::make_shared<SystemClock>(), config_.max_pending_scheduler_launches,
           config_.max_event_trigger_depth, config_.max_event_trigger_deliveries) {
   configure_logging(config_);
+  context_reducers_.add("recent-turns", std::make_shared<RecentTurnsContextReducer>());
   providers_.add("mock", std::make_shared<MockModelProvider>());
   if (!config_.local_openai_endpoint.empty())
     providers_.add("local-openai",
@@ -338,6 +339,18 @@ Json Service::register_pipeline(const std::string &yaml) {
   }
   events_.publish(e);
   return record;
+}
+bool Service::context_reduction_available() const {
+  if (!config_.session_context_reduction_enabled)
+    return false;
+  try {
+    (void)context_reducers_.get(config_.session_context_reducer);
+    return true;
+  } catch (const Error &error) {
+    if (error.code == ErrorCode::NotFound)
+      return false;
+    throw;
+  }
 }
 std::string Service::start(const std::string &name_or_path, const Json &input,
                            const std::string &actor, bool allow_file, Json origin,

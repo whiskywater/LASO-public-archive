@@ -113,6 +113,29 @@ private:
   ContinuationMode mode_;
 };
 
+class MarkerContextReducer final : public ContextReducer {
+public:
+  explicit MarkerContextReducer(bool fail = false, bool malformed = false,
+                                Milliseconds delay = Milliseconds{0})
+      : fail_(fail), malformed_(malformed), delay_(delay) {}
+  ContextReductionResult reduce(const ContextReductionRequest &request,
+                                std::stop_token cancellation) override {
+    if (delay_.count() > 0)
+      std::this_thread::sleep_for(delay_);
+    if (cancellation.stop_requested() || std::chrono::steady_clock::now() >= request.deadline)
+      throw Error(ErrorCode::Timeout, "test reducer deadline");
+    if (fail_)
+      throw Error(ErrorCode::Execution, "private reducer failure");
+    return {"test.marker", "1", request.through_turn_sequence + (malformed_ ? 1 : 0),
+            Json{{"reduced_through", request.through_turn_sequence}}};
+  }
+
+private:
+  bool fail_;
+  bool malformed_;
+  Milliseconds delay_;
+};
+
 Config continuation_config(const std::filesystem::path &path) {
   auto options = config(path);
   options.models["session-model"] =
@@ -1394,6 +1417,120 @@ TEST(Sessions, ContextGenerationIsPassedAndRunSnapshotDoesNotChange) {
   EXPECT_EQ(run_context.body.dump().find("snapshot-private-state"), std::string::npos);
 }
 
+TEST(Sessions, AutomaticReductionCreatesGenerationBeforeRunBinding) {
+  TemporaryDirectory dir;
+  asio::io_context io;
+  auto trace = std::make_shared<ContinuationFixtureState>();
+  auto options = continuation_config(dir.path);
+  options.session_context_reduction_enabled = true;
+  options.session_context_reducer = "recent-turns";
+  options.session_context_reduction_threshold_bytes = 700;
+  options.session_context_reduction_target_bytes = 600;
+  options.session_context_reduction_max_input_bytes = 4096;
+  Service service(io, options);
+  register_continuation_fixture(service, trace);
+  LocalDevelopmentIdentity identity;
+  Api api(service, identity);
+  const auto advertised_capabilities =
+      api.handle("GET", "/api/v1/version", "").body.at("capabilities");
+  ASSERT_TRUE(std::find(advertised_capabilities.begin(), advertised_capabilities.end(),
+                        Json("sessions.context_reduction")) != advertised_capabilities.end());
+  const auto pipeline =
+      service.register_pipeline(continuation_pipeline()).at("id").get<std::string>();
+  const auto session = service.create_session(pipeline);
+  const auto first = service.submit_session_turn(session.id, "auto-reduce-first", Json::object());
+  io.run();
+  io.restart();
+  const auto second = service.submit_session_turn(session.id, "auto-reduce-second", Json::object());
+  io.run();
+  EXPECT_TRUE(service.list(RecordKind::SessionContextGeneration, session.id).empty());
+  io.restart();
+  const auto third = service.submit_session_turn(session.id, "auto-reduce-third", Json::object());
+  io.run();
+  const auto first_turn = service.get(RecordKind::SessionTurn, first.at("id").get<std::string>());
+  const auto second_turn = service.get(RecordKind::SessionTurn, second.at("id").get<std::string>());
+  const auto third_turn = service.get(RecordKind::SessionTurn, third.at("id").get<std::string>());
+  ASSERT_EQ(third_turn.at("state"), "succeeded");
+  const auto generations = service.list(RecordKind::SessionContextGeneration, session.id);
+  ASSERT_EQ(generations.size(), 1U);
+  EXPECT_EQ(generations[0].at("through_turn_sequence"), 2U);
+  EXPECT_EQ(generations[0].at("payload").at("format"), "laso.recent-turns");
+  ASSERT_EQ(generations[0].at("payload").at("turns").size(), 1U);
+  EXPECT_EQ(generations[0].at("payload").at("turns")[0].at("sequence"), 2U);
+  const auto snapshot =
+      service.get(RecordKind::RunContextSnapshot, third_turn.at("run_id").get<std::string>());
+  EXPECT_EQ(snapshot.at("context_generation_id"), generations[0].at("id"));
+  EXPECT_EQ(first_turn.at("state"), "succeeded");
+  EXPECT_EQ(second_turn.at("state"), "succeeded");
+  EXPECT_EQ(service.list(RecordKind::SessionTurn, session.id).size(), 3U);
+  io.restart();
+  const auto fourth = service.submit_session_turn(session.id, "auto-reduce-fourth", Json::object());
+  io.run();
+  const auto fourth_turn = service.get(RecordKind::SessionTurn, fourth.at("id").get<std::string>());
+  ASSERT_EQ(fourth_turn.at("state"), "succeeded");
+  const auto advanced_generations = service.list(RecordKind::SessionContextGeneration, session.id);
+  ASSERT_EQ(advanced_generations.size(), 2U);
+  EXPECT_EQ(advanced_generations[1].at("generation"), 2U);
+  EXPECT_EQ(advanced_generations[1].at("predecessor_id"), advanced_generations[0].at("id"));
+  EXPECT_EQ(advanced_generations[1].at("through_turn_sequence"), 3U);
+  const auto fourth_snapshot =
+      service.get(RecordKind::RunContextSnapshot, fourth_turn.at("run_id").get<std::string>());
+  EXPECT_EQ(fourth_snapshot.at("context_generation_id"), advanced_generations[1].at("id"));
+  EXPECT_EQ(service.list(RecordKind::SessionTurn, session.id).size(), 4U);
+  {
+    std::lock_guard lock(trace->mutex);
+    ASSERT_EQ(trace->observed.size(), 4U);
+    EXPECT_EQ(trace->observed[2].context_generation_id, generations[0].at("id").get<std::string>());
+    EXPECT_TRUE(trace->observed[2].context_turns.empty());
+    EXPECT_EQ(trace->observed[2].context_payload, generations[0].at("payload"));
+    EXPECT_EQ(trace->observed[3].context_generation_id,
+              advanced_generations[1].at("id").get<std::string>());
+    EXPECT_EQ(trace->observed[3].context_payload, advanced_generations[1].at("payload"));
+  }
+}
+
+TEST(Sessions, AutomaticReductionFailureMalformedAndTimedOutResultsFailClosed) {
+  for (const auto scenario : {0, 1, 2}) {
+    TemporaryDirectory dir;
+    asio::io_context io;
+    auto options = config(dir.path);
+    options.session_context_reduction_enabled = true;
+    options.session_context_reducer = "test-marker";
+    options.session_context_reduction_threshold_bytes = 100;
+    options.session_context_reduction_target_bytes = 64;
+    options.session_context_reduction_max_input_bytes = 4096;
+    if (scenario == 2)
+      options.session_context_reduction_timeout_ms = 1;
+    Service service(io, options);
+    service.context_reducer_registry().add(
+        "test-marker",
+        std::make_shared<MarkerContextReducer>(scenario == 0, scenario == 1,
+                                               scenario == 2 ? Milliseconds{10} : Milliseconds{0}));
+    service.functions().add(
+        "session_reduction_probe",
+        std::make_shared<Function>(
+            [](ExecutionContext &, const Json &input) -> Task<Json> { co_return input; }));
+    const auto pipeline =
+        service.register_pipeline(single("type: function\n    function: session_reduction_probe"))
+            .at("id")
+            .get<std::string>();
+    const auto session = service.create_session(pipeline);
+    const auto first = service.submit_session_turn(session.id, "fail-closed-first", Json::object());
+    io.run();
+    io.restart();
+    const auto second =
+        service.submit_session_turn(session.id, "fail-closed-second", Json::object());
+    const auto second_turn =
+        service.get(RecordKind::SessionTurn, second.at("id").get<std::string>());
+    EXPECT_EQ(second_turn.at("state"), "claimed");
+    EXPECT_TRUE(second_turn.value("run_id", std::string{}).empty());
+    EXPECT_TRUE(service.list(RecordKind::SessionContextGeneration, session.id).empty());
+    EXPECT_EQ(service.list(RecordKind::Run).size(), 1U);
+    EXPECT_EQ(service.get(RecordKind::SessionTurn, first.at("id").get<std::string>()).at("state"),
+              "succeeded");
+  }
+}
+
 TEST(Sessions, RunContextSnapshotPreservesRunLocalContinuationProgress) {
   TemporaryDirectory dir;
   asio::io_context io;
@@ -1956,6 +2093,10 @@ TEST(Sessions, PostgresTwoInstancesFenceDispatchAndPreserveSessionOrdering) {
   options.postgres_dsn = dsn;
   options.postgres_schema = schema;
   options.execution_mode = "multi_instance";
+  options.session_context_reduction_enabled = true;
+  options.session_context_reduction_threshold_bytes = 800;
+  options.session_context_reduction_target_bytes = 700;
+  options.session_context_reduction_max_input_bytes = 4096;
   options.validate();
 
   std::atomic<unsigned> active{0};
@@ -1976,7 +2117,7 @@ TEST(Sessions, PostgresTwoInstancesFenceDispatchAndPreserveSessionOrdering) {
       order.push_back(tag);
     }
     active.fetch_sub(1);
-    co_return input;
+    co_return Json{{"ok", true}};
   });
 
   std::string pipeline;
@@ -2083,6 +2224,14 @@ TEST(Sessions, PostgresTwoInstancesFenceDispatchAndPreserveSessionOrdering) {
   }
   EXPECT_EQ(observed_x_order, (std::vector<std::string>{"X-A", "X-B", "X-C"}));
   EXPECT_GE(maximum_active.load(), 2U);
+  const auto generations = first.list(RecordKind::SessionContextGeneration, session_x.id);
+  ASSERT_EQ(generations.size(), 1U);
+  EXPECT_EQ(generations[0].at("through_turn_sequence"), 2U);
+  const auto third_turn = first.get(RecordKind::SessionTurn, x_c);
+  const auto third_snapshot =
+      first.get(RecordKind::RunContextSnapshot, third_turn.at("run_id").get<std::string>());
+  EXPECT_EQ(third_snapshot.at("context_generation_id"), generations[0].at("id"));
+  EXPECT_EQ(first.list(RecordKind::SessionTurn, session_x.id).size(), 3U);
   for (const auto &[session_id, response] : submitted) {
     const auto events = first.session_events(session_id, 0, 100);
     const auto turn_id = response.at("id").get<std::string>();

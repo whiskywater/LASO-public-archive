@@ -13,6 +13,18 @@
 
 namespace laso {
 void Config::validate() {
+  if (session_context_reduction_enabled &&
+      (!std::regex_match(session_context_reducer, std::regex("[A-Za-z0-9][A-Za-z0-9_.-]{0,127}")) ||
+       session_context_reduction_target_bytes == 0 ||
+       session_context_reduction_target_bytes > (std::uint64_t{1024} * 1024) ||
+       session_context_reduction_threshold_bytes <= session_context_reduction_target_bytes ||
+       session_context_reduction_max_input_bytes < session_context_reduction_threshold_bytes ||
+       session_context_reduction_max_input_bytes > (std::uint64_t{16} * 1024 * 1024) ||
+       session_context_reduction_timeout_ms == 0 || session_context_reduction_timeout_ms > 300000))
+    throw Error(ErrorCode::Configuration, "Invalid session context reduction configuration");
+  if (!session_context_reducer_config.is_object() ||
+      session_context_reducer_config.dump().size() > (std::size_t{1024} * 1024))
+    throw Error(ErrorCode::Configuration, "Invalid session context reducer config");
   if (data_dir.empty())
     throw Error(ErrorCode::Configuration, "Data directory is empty");
   if (storage_backend != "sqlite" && storage_backend != "postgres")
@@ -216,6 +228,31 @@ Config load_config(const std::filesystem::path &supplied,
               c.coordination_heartbeat_interval_ms = field.second.as<std::uint64_t>();
             else
               throw Error(ErrorCode::Configuration, "Unknown coordination field");
+          }
+        } else if (key == "session_context_reduction") {
+          if (!pair.second.IsMap())
+            throw Error(ErrorCode::Configuration, "session_context_reduction must be a map");
+          std::set<std::string> fields;
+          for (const auto &field : pair.second) {
+            const auto name = field.first.as<std::string>();
+            if (!fields.insert(name).second)
+              throw Error(ErrorCode::Configuration, "Duplicate context reduction field");
+            if (name == "enabled")
+              c.session_context_reduction_enabled = field.second.as<bool>();
+            else if (name == "reducer")
+              c.session_context_reducer = field.second.as<std::string>();
+            else if (name == "config")
+              c.session_context_reducer_config = detail::yaml_value(field.second);
+            else if (name == "threshold_bytes")
+              c.session_context_reduction_threshold_bytes = field.second.as<std::uint64_t>();
+            else if (name == "target_bytes")
+              c.session_context_reduction_target_bytes = field.second.as<std::uint64_t>();
+            else if (name == "max_input_bytes")
+              c.session_context_reduction_max_input_bytes = field.second.as<std::uint64_t>();
+            else if (name == "timeout_ms")
+              c.session_context_reduction_timeout_ms = field.second.as<std::uint64_t>();
+            else
+              throw Error(ErrorCode::Configuration, "Unknown context reduction field");
           }
         } else if (key == "models") {
           c.models.clear();
@@ -553,6 +590,18 @@ Config load_config(const std::filesystem::path &supplied,
       c.api_port = integer(v);
     else if (k == "max_session_sse_streams")
       c.max_session_sse_streams = integer(v);
+    else if (k == "session_context_reduction_enabled")
+      c.session_context_reduction_enabled = boolean(v);
+    else if (k == "session_context_reducer")
+      c.session_context_reducer = v;
+    else if (k == "session_context_reduction_threshold_bytes")
+      c.session_context_reduction_threshold_bytes = uint64(v);
+    else if (k == "session_context_reduction_target_bytes")
+      c.session_context_reduction_target_bytes = uint64(v);
+    else if (k == "session_context_reduction_max_input_bytes")
+      c.session_context_reduction_max_input_bytes = uint64(v);
+    else if (k == "session_context_reduction_timeout_ms")
+      c.session_context_reduction_timeout_ms = uint64(v);
     else if (k == "log_level")
       c.log_level = v;
     else if (k == "local_openai_endpoint")

@@ -21,10 +21,11 @@ version number. The current session capabilities are:
 | `sessions.sse` | Stream/replay the event journal with `Last-Event-ID` reconnect support and bounded per-process admission. |
 | `sessions.context_generations` | Store immutable provider-neutral context generations against completed history boundaries, with revision-checked ordering. |
 | `sessions.run_context_snapshots` | Capture the selected generation and provider continuation state atomically with session turn-to-run binding. |
+| `sessions.context_reduction` | Conditional: opt-in automatic generation using the configured registered reducer and byte-budget policy. |
 
-No automatic context reducer/compaction, membership, or authenticated-principal
-capability is advertised. Context generations are supplied by a generic caller;
-LASO does not create summaries or choose a vendor-specific representation.
+Context reduction is advertised only when it is enabled and the configured
+reducer is registered. LASO does not require reduction to mean natural-language
+summarization and does not include a vendor-specific representation.
 
 ## Session API
 
@@ -132,10 +133,48 @@ generation are not omitted. Providers must advertise the generic
 The API read
 endpoint exposes generation metadata but not its payload. The run-context
 endpoint never returns provider continuation payloads. The first implementation
-has no content hash or automatic reducer. Future context builders/reducers may
-be pipeline-, provider-, plugin-, or application-supplied; Core does not
-prescribe a vendor or summarization algorithm. Full accepted turn/event history
-remains unchanged and authoritative.
+has no content hash. Automatic reduction is an opt-in runtime policy configured
+under `session_context_reduction`. It uses serialized-byte budgets for the
+previous derived payload, eligible completed turn records, and the pending turn
+input. If the effective bytes exceed the target, or the configured threshold is
+reached, the configured `ContextReducer` derives a replacement generation
+before run binding. It receives the latest committed generation and durable
+turns after its boundary. It returns a representation kind/version, opaque
+payload, and exact through-turn boundary; Core validates and commits the result
+through the existing revision-checked immutable storage path.
+
+The `ContextReducer` interface is provider-neutral and receives a deadline and
+cancellation token. Service shutdown requests cancellation. Reducers must
+cooperate with both; LASO rejects results returned after the deadline, but
+cannot forcibly preempt an extension that ignores them. A reducer cannot write
+storage; LASO owns validation, idempotency, persistence, and run-snapshot
+selection. The included `recent-turns` reducer is a deterministic
+reference implementation: it retains the newest complete turn records that
+fit the configured serialized-byte budget. It does not tokenize, summarize
+natural language, or claim byte counts equal a provider's token count.
+Applications may register another reducer through the Core registry. A
+pipeline-based reducer is not implemented; a later adapter can use this
+interface, but must avoid mutating or recursively dispatching the source
+session.
+
+Reduction is fail-closed. A missing reducer, reducer error/deadline expiry,
+invalid result, unsupported prior representation, over-budget output, stale
+boundary, or irrecoverable generation revision conflict prevents the affected
+turn from binding a run. The accepted turn remains durable for recovery/retry.
+Reducers should be deterministic for an identical request so a stable
+idempotency key makes retries converge. An application-created generation is
+the reducer's predecessor; if it already covers all prior turns, no reduction
+is needed. If manual or competing generation creation wins while reduction is
+running, Core rereads the committed generation and reevaluates once. Run binding
+then selects the latest committed generation atomically with its immutable
+snapshot.
+
+The target is a byte budget for serialized session context and the current turn
+input. It is not a provider tokenizer or a promise to fit a provider's entire
+prompt/context window; providers remain responsible for their model-specific
+limits. Full accepted turn/event history remains unchanged and authoritative.
+Runtime events record attempts, result/failure, byte counts, generation, and
+duration without logging context payloads.
 
 Provider continuation remains separate opaque adapter state: it is the
 provider-specific continuation consumed by an adapter, and the run snapshot

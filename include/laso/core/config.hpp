@@ -46,6 +46,13 @@ struct Config {
            max_event_trigger_depth = 16, max_event_trigger_deliveries = 1024, max_worker_jobs = 32,
            max_worker_jobs_per_worker = 16, claim_batch_size = 8, max_pending_runs = 1024,
            artifact_s3_max_retries = 2;
+  bool session_context_reduction_enabled = false;
+  std::string session_context_reducer = "recent-turns";
+  Json session_context_reducer_config = Json::object();
+  std::uint64_t session_context_reduction_threshold_bytes = 32768,
+                session_context_reduction_target_bytes = 16384,
+                session_context_reduction_max_input_bytes = 1048576,
+                session_context_reduction_timeout_ms = 30000;
   // Zero disables a budget. Token and cost budgets accumulate per run.
   std::uint64_t max_worker_wall_time_ms = 0, max_worker_tokens_per_run = 0;
   std::uint64_t max_artifact_bytes = std::uint64_t{256} * 1024 * 1024,

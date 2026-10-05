@@ -2,6 +2,7 @@
 #include <laso/pipeline/parser.hpp>
 #include <laso/runtime/runtime.hpp>
 #include <limits>
+#include <sstream>
 
 namespace laso {
 namespace {
@@ -14,6 +15,143 @@ std::string session_continuation_id(const std::string &session_id, const std::st
 std::string run_continuation_candidate_id(const std::string &run_id,
                                           const std::string &provider_id) {
   return "candidate:" + std::to_string(run_id.size()) + ":" + run_id + ":" + provider_id;
+}
+
+std::string reduction_request_key(std::uint64_t expected_generation,
+                                  std::uint64_t through_turn_sequence, const Json &input) {
+  // Stable retry identity only; generation immutability does not rely on this
+  // non-cryptographic fingerprint as an integrity mechanism.
+  std::uint64_t hash = 1469598103934665603ULL;
+  for (const unsigned char byte : input.dump()) {
+    hash ^= byte;
+    hash *= 1099511628211ULL;
+  }
+  std::ostringstream out;
+  out << "auto-" << expected_generation << '-' << through_turn_sequence << '-' << std::hex << hash;
+  return out.str();
+}
+
+void reduce_session_context_if_needed(const RuntimeDependencies &dependencies, const Config &config,
+                                      const std::string &session_id, const Json &current_turn,
+                                      std::stop_token cancellation) {
+  if (!config.session_context_reduction_enabled)
+    return;
+  if (cancellation.stop_requested())
+    throw Error(ErrorCode::Cancellation, "Session context reduction was cancelled");
+  const auto current_sequence = current_turn.value("sequence", std::uint64_t{0});
+  const auto current_input_bytes = current_turn.value("input", Json(nullptr)).dump().size();
+  if (current_input_bytes >= config.session_context_reduction_target_bytes)
+    throw Error(ErrorCode::Capacity, "Current turn exceeds the session context budget");
+  if (current_sequence <= 1)
+    return;
+  const auto reduction_target = config.session_context_reduction_target_bytes - current_input_bytes;
+  const auto through = current_sequence - 1;
+  for (unsigned attempt = 0; attempt != 2; ++attempt) {
+    const auto previous_json = dependencies.storage.latest_session_context_generation(session_id);
+    std::optional<SessionContextGeneration> previous;
+    std::uint64_t previous_generation = 0, previous_boundary = 0;
+    if (previous_json) {
+      previous = previous_json->get<SessionContextGeneration>();
+      previous_generation = previous->generation;
+      previous_boundary = previous->through_turn_sequence;
+    }
+    if (previous_boundary >= through)
+      return;
+
+    Json eligible = Json::array();
+    std::uint64_t cursor = previous_boundary;
+    std::size_t input_bytes = previous ? previous->payload.dump().size() : 0;
+    while (cursor < through) {
+      const auto batch =
+          dependencies.storage.session_turns_between(session_id, cursor, through, 128);
+      if (batch.empty())
+        throw Error(ErrorCode::Conflict, "Session history changed during context reduction");
+      for (const auto &turn : batch) {
+        const auto sequence = turn.value("sequence", std::uint64_t{0});
+        if (sequence != cursor + 1 || sequence > through)
+          throw Error(ErrorCode::Conflict,
+                      "Session history order changed during context reduction");
+        const auto bytes = turn.dump().size();
+        if (bytes >
+            config.session_context_reduction_max_input_bytes -
+                std::min(input_bytes, static_cast<std::size_t>(
+                                          config.session_context_reduction_max_input_bytes))) {
+          log_diagnostic("runtime.session_context_reduction_failed",
+                         {{"failure", "input_limit"}, {"input_bytes", input_bytes}});
+          throw Error(ErrorCode::Capacity,
+                      "Session history exceeds the context reducer input limit");
+        }
+        input_bytes += bytes;
+        eligible.push_back(turn);
+        cursor = sequence;
+      }
+    }
+    const auto effective_bytes = input_bytes + current_input_bytes;
+    if (effective_bytes <= config.session_context_reduction_target_bytes &&
+        effective_bytes < config.session_context_reduction_threshold_bytes)
+      return;
+
+    Json reducer_input{{"previous_generation", previous ? Json(*previous) : Json(nullptr)},
+                       {"eligible_turns", eligible},
+                       {"through_turn_sequence", through},
+                       {"reducer", config.session_context_reducer},
+                       {"reducer_config", config.session_context_reducer_config},
+                       {"target_payload_bytes", reduction_target}};
+    const auto reducer = dependencies.context_reducers.get(config.session_context_reducer);
+    const auto deadline = std::chrono::steady_clock::now() +
+                          Milliseconds{config.session_context_reduction_timeout_ms};
+    const auto reduction_started = std::chrono::steady_clock::now();
+    log_diagnostic("runtime.session_context_reduction_attempted",
+                   {{"input_bytes", effective_bytes}, {"through_turn_sequence", through}});
+    ContextReductionResult result;
+    try {
+      result = reducer->reduce({session_id, previous, eligible, through,
+                                static_cast<std::size_t>(reduction_target), deadline,
+                                config.session_context_reducer_config},
+                               cancellation);
+      if (std::chrono::steady_clock::now() >= deadline)
+        throw Error(ErrorCode::Timeout, "Context reducer deadline expired");
+    } catch (const Error &error) {
+      log_diagnostic("runtime.session_context_reduction_failed",
+                     {{"failure", error.code == ErrorCode::Timeout ? "timeout" : "reducer"}});
+      throw Error(error.code, "Session context reduction failed");
+    } catch (...) {
+      log_diagnostic("runtime.session_context_reduction_failed", {{"failure", "reducer"}});
+      throw Error(ErrorCode::Execution, "Session context reduction failed");
+    }
+    if (result.representation_kind.empty() || result.representation_kind.size() > 128 ||
+        result.representation_version.empty() || result.representation_version.size() > 128 ||
+        result.through_turn_sequence != through || !result.payload.is_object() ||
+        result.payload.dump().size() > reduction_target) {
+      log_diagnostic("runtime.session_context_reduction_failed", {{"failure", "invalid_result"}});
+      throw Error(ErrorCode::Validation, "Context reducer returned an invalid result");
+    }
+    if (cancellation.stop_requested())
+      throw Error(ErrorCode::Cancellation, "Session context reduction was cancelled");
+    const auto idempotency_key = reduction_request_key(previous_generation, through, reducer_input);
+    try {
+      (void)dependencies.storage.create_session_context_generation(
+          session_id, previous_generation, through, idempotency_key, result.representation_kind,
+          result.representation_version, result.payload);
+      log_diagnostic("runtime.session_context_reduction_succeeded",
+                     {{"generation", previous_generation + 1},
+                      {"through_turn_sequence", through},
+                      {"input_bytes", effective_bytes},
+                      {"output_bytes", result.payload.dump().size()},
+                      {"duration_ms", std::chrono::duration_cast<Milliseconds>(
+                                          std::chrono::steady_clock::now() - reduction_started)
+                                          .count()}});
+      return;
+    } catch (const Error &error) {
+      if (error.code != ErrorCode::Conflict || attempt != 0)
+        throw;
+      log_diagnostic("runtime.session_context_reduction_revision_conflict",
+                     {{"through_turn_sequence", through}});
+      // A manual generation or another service instance won the session-row
+      // serialization race. Reread and reevaluate against that committed state.
+    }
+  }
+  throw Error(ErrorCode::Conflict, "Session context reduction lost its revision race");
 }
 
 std::vector<Json> list_all(const Storage &storage, RecordKind kind, const std::string &run_id) {
@@ -260,6 +398,8 @@ void Runtime::dispatch_session(const std::string &session_id) {
     session_test_point(SessionTestPoint::AfterClaim);
 #endif
     const auto pipeline_id = turn->value("pipeline_id", session.pipeline_id);
+    reduce_session_context_if_needed(deps_, config_, session_id, *turn,
+                                     context_reduction_stop_.get_token());
     const auto pipeline = deps_.resolve_pipeline(pipeline_id);
     run(pipeline, turn->at("input"), "session", "", "", 0, "", Json::object(), Json::object(),
         session_id, turn->at("id").get<std::string>(), owner, fence);
@@ -1381,6 +1521,7 @@ void Runtime::cancel_locked(const std::string &id, std::set<std::string> &visite
 void Runtime::shutdown() {
   std::lock_guard lock(mutex_);
   stopping_ = true;
+  context_reduction_stop_.request_stop();
   claim_timer_->cancel();
   lease_timer_->cancel();
   session_timer_->cancel();

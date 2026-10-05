@@ -5,6 +5,29 @@ variables; environment names use uppercase field names, for example
 `LASO_DATA_DIR` and `LASO_POSTGRES_DSN`. A value supplied through the explicit
 CLI override takes precedence over the file and environment.
 
+## Session context reduction
+
+Reduction is disabled by default. Enable the deterministic byte-budgeted
+reference reducer with:
+
+```yaml
+session_context_reduction:
+  enabled: true
+  reducer: recent-turns
+  threshold_bytes: 32768
+  target_bytes: 16384
+  max_input_bytes: 1048576
+  timeout_ms: 30000
+```
+
+The input budget bounds serialized previous-generation payload and eligible
+durable turn records. `target_bytes` caps the derived payload plus pending turn
+input. `threshold_bytes` permits earlier reduction and must exceed the target.
+`timeout_ms` gives reducers a deadline; reducers must cooperate with it, and
+LASO rejects results returned after the deadline. The server advertises
+`sessions.context_reduction` only when reduction is enabled and the configured
+reducer is registered. See [session context semantics](sessions.md).
+
 `config/laso.example.yaml` is a safe SQLite starting point. It contains no
 credentials and binds the development API to loopback.
 

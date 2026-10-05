@@ -362,6 +362,56 @@ TEST(Configuration, BoundsSessionSseStreamCapacity) {
   c.max_session_sse_streams = 128;
   EXPECT_NO_THROW(c.validate());
 }
+TEST(Configuration, ValidatesContextReductionBudgets) {
+  Config c;
+  c.session_context_reduction_enabled = true;
+  EXPECT_NO_THROW(c.validate());
+  c.session_context_reduction_threshold_bytes = c.session_context_reduction_target_bytes;
+  EXPECT_THROW(c.validate(), Error);
+  c.session_context_reduction_threshold_bytes = 32768;
+  c.session_context_reduction_max_input_bytes = 32;
+  EXPECT_THROW(c.validate(), Error);
+}
+TEST(Configuration, ParsesSessionContextReductionPolicy) {
+  TemporaryDirectory dir;
+  const auto path = dir.path / "laso.yaml";
+  {
+    std::ofstream out(path);
+    out << "session_context_reduction:\n"
+           "  enabled: true\n"
+           "  reducer: recent-turns\n"
+           "  threshold_bytes: 700\n"
+           "  target_bytes: 600\n"
+           "  max_input_bytes: 4096\n"
+           "  timeout_ms: 1200\n";
+  }
+  const auto config = load_config(path);
+  EXPECT_TRUE(config.session_context_reduction_enabled);
+  EXPECT_EQ(config.session_context_reducer, "recent-turns");
+  EXPECT_EQ(config.session_context_reduction_threshold_bytes, 700U);
+  EXPECT_EQ(config.session_context_reduction_target_bytes, 600U);
+  EXPECT_EQ(config.session_context_reduction_timeout_ms, 1200U);
+}
+TEST(ContextReducer, RecentTurnsKeepsNewestTurnsWithinByteBudget) {
+  RecentTurnsContextReducer reducer;
+  Json turns = Json::array(
+      {Json{{"sequence", 1U}, {"input", "old"}}, Json{{"sequence", 2U}, {"input", "new"}}});
+  ContextReductionRequest request;
+  request.session_id = "session-test";
+  request.eligible_turns = turns;
+  request.through_turn_sequence = 2;
+  request.target_payload_bytes =
+      Json{{"format", "laso.recent-turns"}, {"turns", Json::array({turns.back()})}}.dump().size();
+  request.deadline = std::chrono::steady_clock::now() + Milliseconds{1000};
+  const auto result = reducer.reduce(request, {});
+  EXPECT_EQ(result.representation_kind, "laso.recent-turns");
+  EXPECT_EQ(result.representation_version, "1");
+  EXPECT_EQ(result.through_turn_sequence, 2U);
+  ASSERT_EQ(result.payload.at("turns").size(), 1U);
+  EXPECT_EQ(result.payload.at("turns")[0].at("sequence"), 2U);
+  request.target_payload_bytes = 1;
+  EXPECT_THROW(reducer.reduce(request, {}), Error);
+}
 TEST(Configuration, ValidatesPerRunNodeLimit) {
   Config c;
   c.max_nodes_per_run = 0;

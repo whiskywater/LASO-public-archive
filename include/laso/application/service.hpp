@@ -95,6 +95,10 @@ public:
   ProviderRegistry &provider_registry() {
     return providers_;
   }
+  ContextReducerRegistry &context_reducer_registry() {
+    return context_reducers_;
+  }
+  bool context_reduction_available() const;
   NodeRegistry &node_registry() {
     return nodes_;
   }
@@ -121,6 +125,7 @@ private:
   std::unique_ptr<Coordination> coordination_;
   InProcessEventBus events_;
   ProviderRegistry providers_;
+  ContextReducerRegistry context_reducers_;
   ToolRegistry tools_;
   WorkerRegistry worker_registry_;
   FunctionRegistry functions_;

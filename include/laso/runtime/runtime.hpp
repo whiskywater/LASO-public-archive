@@ -1,5 +1,6 @@
 #pragma once
 #include <functional>
+#include <laso/context/reducer.hpp>
 #include <laso/core/config.hpp>
 #include <laso/events/events.hpp>
 #include <laso/nodes/node.hpp>
@@ -29,6 +30,7 @@ struct RuntimeDependencies {
   Storage &storage;
   EventBus &events;
   ProviderRegistry &providers;
+  ContextReducerRegistry &context_reducers;
   ToolRegistry &tools;
   FunctionRegistry &functions;
   NodeRegistry &nodes;
@@ -87,6 +89,7 @@ private:
   };
   std::map<std::string, ActiveRun> active_;
   std::map<std::string, ActiveNode> active_nodes_;
+  std::stop_source context_reduction_stop_;
   bool stopping_ = false;
   bool distributed_started_ = false;
 #ifdef LASO_ENABLE_SESSION_TEST_HOOKS
