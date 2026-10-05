@@ -59,6 +59,20 @@ multi-instance recovery. The full worker-death, stale-live-worker, database
 interruption, and owner-recovery scenarios remain separate operational gates;
 they must not be inferred from a successful basic run.
 
+`distributed-session-two-process.sh` is a deterministic public-API acceptance
+test for durable sessions. CTest runs two independent `laso-server` processes
+with separate ports and local state directories against one isolated PostgreSQL
+schema. It checks cross-instance session visibility, ordered turns submitted
+through both processes, idempotent retry, SSE `Last-Event-ID` replay against
+the persisted event sequence, recovery of an accepted session after forcibly
+terminating one server, and visibility after that server restarts. It requires
+`LASO_TEST_POSTGRES_DSN` (or `LASO_POSTGRES_DSN`) plus `curl`, `jq`, and
+`psql`; the script drops only its uniquely named schema. It validates
+process boundaries on one host. It does not establish cross-physical-machine
+behavior or shared S3 artifact behavior. The third turn additionally checks
+that a context generation and its run snapshot retain provenance across the
+peer process and server restart.
+
 The loopback-only `artifact-chaos-proxy.py` provides deterministic upload
 barriers for artifact failure experiments. It bounds declared upload size and
 upload duration, marks request start/publication using caller-selected files,

@@ -37,7 +37,6 @@ before starting LASO.
 | Field | Default | Meaning |
 |---|---:|---|
 | `data_dir` | `.laso` | Runtime state and the default local artifact-store parent. Keep it inside a dedicated service-owned directory. |
-| `db_path` | `data_dir/laso.db` | SQLite database path when SQLite is selected. |
 | `artifact_root` | `data_dir/artifacts` | Content-addressed object store root. In multi-instance mode this must be a trusted shared/reachable filesystem root for every participating instance. |
 | `artifact_backend` | `filesystem` | `filesystem` (default) or optional `s3`. S3 requires a build with `LASO_ENABLE_S3=ON`. |
 | `artifact_s3_endpoint` | empty | Optional S3-compatible endpoint origin. Empty uses the AWS SDK's region-derived endpoint. Do not include credentials or URL query strings. |
@@ -57,19 +56,18 @@ before starting LASO.
 | `artifact_service_port` | `0` | Gateway port on the artifact-store owner; `0` disables the gateway. |
 | `artifact_service_url` | empty | `http://host:port` endpoint used by a remote worker to fetch/upload objects. |
 | `artifact_service_token` | empty | Required bearer token for the gateway. Treat it as a secret and prefer `LASO_ARTIFACT_SERVICE_TOKEN`. |
-| `storage_backend` | `sqlite` | `sqlite` or `postgres`. PostgreSQL requires a PostgreSQL-enabled build. |
-| `postgres_dsn` | empty | PostgreSQL connection string. Treat it as a secret when it contains credentials. |
+| `postgres_dsn` | empty | Required PostgreSQL connection string. Treat it as a secret when it contains credentials. |
 | `postgres_schema` | `public` | Dedicated schema for this LASO deployment. |
-| `execution_mode` | `single` | `single` for SQLite/local use or `multi_instance` for PostgreSQL coordination. |
+| `execution_mode` | `single` | `single` for one service owner or `multi_instance` for PostgreSQL coordination. PostgreSQL is required in both modes. |
 | `coordination.mode` | `single_owner` | Use the documented experimental multi-instance mode only with PostgreSQL. |
 | `postgres_pool_min_connections` | `1` | Minimum PostgreSQL pool size. |
 | `postgres_pool_max_connections` | `4` | Maximum PostgreSQL pool size. |
 | `postgres_pool_acquisition_timeout_ms` | `1000` | Bounded pool acquisition wait. |
 | `max_session_sse_streams` | `32` | Maximum session event streams per LASO process (1–128). Admission is immediate; excess streams receive HTTP 429 and `Retry-After: 1`. See [session SSE](session-sse.md) for replay and reconnect behavior. |
 
-SQLite is deliberately single-instance. Do not run multiple LASO processes
-against the same SQLite state. PostgreSQL multi-instance mode uses database
-leases and fencing; it permits at-least-once attempts, not exactly-once work.
+PostgreSQL is required in both execution modes. Multi-instance mode uses
+database leases and fencing; it permits at-least-once attempts, not
+exactly-once work.
 
 Artifact objects are immutable SHA-256-addressed files. The artifact store
 streams files through bounded temporary files and verifies the digest and byte

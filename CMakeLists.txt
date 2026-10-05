@@ -277,6 +277,9 @@ if(BUILD_TESTING)
   add_test(NAME cli_validate COMMAND laso pipeline validate ${PROJECT_SOURCE_DIR}/examples/hello-pipeline/pipeline.yaml)
   add_test(NAME process_smoke COMMAND bash ${PROJECT_SOURCE_DIR}/tests/integration/process-smoke.sh ${CMAKE_BINARY_DIR} ${PROJECT_SOURCE_DIR})
   set_tests_properties(process_smoke PROPERTIES TIMEOUT 60 SKIP_RETURN_CODE 77)
+  add_test(NAME distributed_session_two_process
+           COMMAND bash ${PROJECT_SOURCE_DIR}/tests/acceptance/distributed-session-two-process.sh ${CMAKE_BINARY_DIR} ${PROJECT_SOURCE_DIR})
+  set_tests_properties(distributed_session_two_process PROPERTIES TIMEOUT 180 SKIP_RETURN_CODE 77)
   add_test(NAME distributed_m3_acceptance
            COMMAND bash ${PROJECT_SOURCE_DIR}/tests/acceptance/distributed-m3.sh ${CMAKE_BINARY_DIR} ${PROJECT_SOURCE_DIR})
   set_tests_properties(distributed_m3_acceptance PROPERTIES TIMEOUT 600 SKIP_RETURN_CODE 77)
